@@ -19,6 +19,14 @@ export type ProjectType =
 export interface Constraints {
   keywords: string[];
   requiredFeatures: string[];
+  /**
+   * Orthogonal facets of the query that a repo must ALL satisfy to be relevant
+   * (e.g. ["frontend UI design", "skill for Claude Code / Codex"]). Used by the
+   * funnel for conjunctive (aspect-decomposed) semantic ranking so that a strong
+   * match on one axis can't drown out a total miss on another. Empty = single-
+   * vector ranking (heuristic fallback).
+   */
+  aspects: string[];
   language: string | null;
   licenses: string[];
   pushedWithinDays: number | null;

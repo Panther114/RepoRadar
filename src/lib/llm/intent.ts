@@ -27,6 +27,7 @@ const intentSchema = z.object({
   normalizedPrompt: z.string().optional(),
   keywords: z.array(z.string()).optional(),
   requiredFeatures: z.array(z.string()).optional(),
+  aspects: z.array(z.string()).optional(),
   language: z.string().nullable().optional(),
   licenses: z.array(z.string()).optional(),
   pushedWithinDays: z.number().nullable().optional(),
@@ -60,9 +61,15 @@ function applyFilters(c: Constraints, filters?: SearchFilters): Constraints {
 export function heuristicIntent(prompt: string, filters?: SearchFilters): Intent {
   const lower = prompt.toLowerCase();
 
+  // Detect language ONLY from exact word tokens — NEVER substring. A substring
+  // match (`"good".includes("go")` → Go) was silently injecting `language:Go`
+  // into every query and destroying recall. Canonical language names are
+  // unambiguous as whole tokens, so exact membership is safe and generalizes
+  // (no per-language regex). We keep `+`/`#` so "c++" / "c#" tokenize intact.
+  const tokens = new Set(lower.split(/[^a-z0-9+#]+/).filter(Boolean));
   let language: string | null = null;
   for (const [k, v] of Object.entries(KNOWN_LANGUAGES)) {
-    if (lower.includes(k)) { language = v; break; }
+    if (tokens.has(k)) { language = v; break; }
   }
 
   const licenses: string[] = [];
@@ -93,6 +100,10 @@ export function heuristicIntent(prompt: string, filters?: SearchFilters): Intent
     {
       keywords,
       requiredFeatures: [],
+      // The heuristic can't reliably identify orthogonal aspects without an LLM,
+      // so it leaves this empty → the funnel uses single-vector ranking. The LLM
+      // path (the default) fills this for conjunctive aspect ranking.
+      aspects: [],
       language,
       licenses,
       pushedWithinDays,
@@ -179,6 +190,24 @@ Examples of required expansion:
 • "Notion-like" → block editor, workspace, wiki, note-taking, ProseMirror, block-based, TipTap
 • "RAG" → retrieval-augmented generation, vector search, embeddings, chunking, langchain, llamaindex
 
+━━━ ASPECTS (CRITICAL FOR RANKING) ━━━
+Decompose the request into 2-4 ORTHOGONAL aspects — the independent facets a repo must ALL satisfy to be truly relevant. Each aspect is a short standalone phrase that embeds well on its own.
+
+Think of the distinct axes:
+• DOMAIN / topic — what the project is fundamentally about (this is usually the MOST important and the one that gets drowned out): "frontend UI and visual design", "authentication and login", "vector similarity search"
+• PLATFORM / integration — what it must work with: "skill or plugin for Claude Code or Codex AI agents", "Next.js integration"
+• TYPE / form — the artifact kind, only if it matters: "reusable library", "CLI tool"
+
+Rules:
+• List the DOMAIN aspect FIRST. It is the differentiator.
+• Keep aspects independent — do NOT repeat the same concept across two aspects.
+• Each aspect must be self-contained and meaningful when embedded alone (no pronouns, no "the above").
+
+Example — "good codex/claude frontend skills":
+  aspects: ["frontend UI, CSS and visual design", "agent skill / plugin for Claude Code or Codex"]
+Example — "lightweight open-source alternative to Firebase Auth for Next.js":
+  aspects: ["user authentication and login backend", "lightweight self-hostable alternative to Firebase Auth", "Next.js / JavaScript integration"]
+
 ━━━ QUERY GENERATION RULES ━━━
 Generate 6-8 DIVERSE GitHub search queries. Mix ALL of these strategies:
 1. Focused keyword + language filter: "block editor markdown language:TypeScript"
@@ -193,6 +222,7 @@ Generate 6-8 DIVERSE GitHub search queries. Mix ALL of these strategies:
 Return ONLY this JSON object (no prose, no markdown fences):
 {
   "normalizedPrompt": string,        // 1-sentence restatement clarifying the intent
+  "aspects": string[],               // 2-4 orthogonal facets, DOMAIN first (see ASPECTS section)
   "keywords": string[],              // 6-10 concise search terms — include known library names!
   "requiredFeatures": string[],      // concrete capabilities the repo MUST demonstrate
   "language": string | null,         // canonical GitHub language name, or null
@@ -232,6 +262,10 @@ export async function extractIntent(
     {
       keywords: d.keywords?.length ? d.keywords : fallback.constraints.keywords,
       requiredFeatures: d.requiredFeatures ?? [],
+      // Orthogonal aspects for conjunctive funnel ranking. Falls back to the
+      // normalized prompt as a single aspect (≡ single-vector) if the model
+      // didn't decompose, so behaviour degrades gracefully.
+      aspects: d.aspects?.filter((a) => a.trim().length > 0) ?? [],
       language: d.language ?? fallback.constraints.language,
       licenses: d.licenses ?? [],
       pushedWithinDays: d.pushedWithinDays ?? fallback.constraints.pushedWithinDays,
@@ -244,8 +278,21 @@ export async function extractIntent(
     filters,
   );
 
-  const queries =
-    d.queries?.length ? d.queries.slice(0, 8) : buildQueries(constraints, prompt);
+  // Sanitize LLM-emitted queries: models sometimes invent `language:any`, which
+  // GitHub treats as a real language named "any" → those query slots return
+  // nothing and waste recall. Strip these placeholder qualifiers (normalization,
+  // not a relevance heuristic) and drop any query left empty.
+  const sanitizeQuery = (q: string): string =>
+    q
+      .replace(/\blanguage:(any|all|none|n\/a)\b/gi, "")
+      .replace(/\s{2,}/g, " ")
+      .trim();
+
+  const llmQueries = d.queries?.length
+    ? Array.from(new Set(d.queries.map(sanitizeQuery).filter(Boolean))).slice(0, 8)
+    : null;
+
+  const queries = llmQueries?.length ? llmQueries : buildQueries(constraints, prompt);
 
   return {
     normalizedPrompt: d.normalizedPrompt?.trim() || prompt.trim(),

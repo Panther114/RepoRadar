@@ -82,7 +82,22 @@ export async function chatJson<T = unknown>(args: {
       clearTimeout(timer);
     }
   } catch (error) {
-    console.error("[llm] chatJson failed:", error);
+    const model = args.model ?? LLM_MODEL;
+    // A 404 / "No endpoints found" means the configured model slug has no
+    // available provider on this key. This silently degrades the whole pipeline
+    // to the heuristic/deterministic path, so make it SCREAM — a misconfigured
+    // model is the single most damaging-yet-invisible failure mode here.
+    const status = (error as { status?: number })?.status;
+    const msg = error instanceof Error ? error.message : String(error);
+    if (status === 404 || /no endpoints found/i.test(msg)) {
+      console.error(
+        `[llm] ❌ MODEL UNAVAILABLE: "${model}" returned 404 (no provider endpoint on this OpenRouter key). ` +
+          `The pipeline is now falling back to the deterministic/heuristic path — search quality will be DEGRADED. ` +
+          `Fix OPENROUTER_MODEL / INTENT_MODEL in .env to a model that resolves (e.g. google/gemini-2.5-flash-lite).`,
+      );
+    } else {
+      console.error(`[llm] chatJson failed (model="${model}"):`, error);
+    }
     return null;
   }
 }

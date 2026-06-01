@@ -8,7 +8,7 @@ const schema = z.object({
   DATABASE_URL: z.string().min(1, "DATABASE_URL is required"),
   GITHUB_TOKEN: z.string().optional().default(""),
   OPENROUTER_API_KEY: z.string().optional().default(""),
-  OPENROUTER_MODEL: z.string().optional().default("google/gemini-2.0-flash-001"),
+  OPENROUTER_MODEL: z.string().optional().default("google/gemini-2.5-flash-lite"),
   // Separate fast model used only for intent extraction (simpler task, needs sub-second latency).
   // Falls back to OPENROUTER_MODEL when unset.
   INTENT_MODEL: z.string().optional().default(""),

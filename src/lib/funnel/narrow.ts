@@ -1,4 +1,4 @@
-import { embed, embedBatch, cosineSimilarity } from "@/lib/embeddings/embedder";
+import { embedBatch, cosineSimilarity } from "@/lib/embeddings/embedder";
 import { clamp01 } from "@/lib/scoring/rubric";
 import type { Candidate, Constraints, Intent } from "@/lib/types";
 
@@ -52,6 +52,33 @@ function candidateText(c: Candidate): string {
     .slice(0, 2000);
 }
 
+/** Geometric mean of values in (0,1]. Conjunctive: one low value drags it down. */
+function geometricMean(xs: number[]): number {
+  if (xs.length === 0) return 0;
+  let logSum = 0;
+  for (const x of xs) logSum += Math.log(Math.max(x, 1e-4));
+  return Math.exp(logSum / xs.length);
+}
+
+/**
+ * Conjunctive similarity from per-aspect similarities. A repo must satisfy
+ * EVERY aspect; a strong match on one axis cannot rescue a miss on another.
+ *
+ *   combined = 0.5 * worstAspect + 0.5 * geometricMean(aspects)
+ *
+ * The `min` term is the pure conjunction (worst-matching aspect dominates); the
+ * geometric mean smooths it so two decent aspects still beat one-great/one-poor.
+ * This is what stops the "Claude/Codex" platform axis from drowning out the
+ * "frontend/UI" domain axis: an off-domain repo's domain aspect is low, so its
+ * min collapses no matter how perfectly it matches the platform axis.
+ */
+function conjunctiveSim(aspectSims: number[]): number {
+  if (aspectSims.length === 0) return 0;
+  const min = Math.min(...aspectSims);
+  const gm = geometricMean(aspectSims);
+  return clamp01(0.5 * min + 0.5 * gm);
+}
+
 function intentText(intent: Intent): string {
   const c = intent.constraints;
   return [
@@ -77,16 +104,44 @@ export async function narrowCandidates(
   const c = intent.constraints;
   const candTexts = candidates.map(candidateText);
 
-  // Embed intent + all candidates in a single batched ONNX call
-  const allTexts = [intent.normalizedPrompt + ". " + intentText(intent), ...candTexts];
-  const [intentEmbedding, ...candEmbeddings] = await embedBatch(allTexts);
+  // Aspect-decomposed ranking: when the LLM produced ≥2 orthogonal aspects we
+  // embed each one separately and combine conjunctively, so a repo must satisfy
+  // EVERY facet. With <2 aspects (heuristic fallback) we use the single whole-
+  // prompt vector. Everything is embedded in ONE batched ONNX call.
+  const aspects = (c.aspects ?? []).map((a) => a.trim()).filter(Boolean);
+  const useAspects = aspects.length >= 2;
+
+  // Layout of the batched embedding call:
+  //   [0]                    = whole-prompt intent vector
+  //   [1 .. 1+A)             = one vector per aspect
+  //   [1+A .. end)           = one vector per candidate
+  const wholeIntentText = intent.normalizedPrompt + ". " + intentText(intent);
+  const allTexts = [wholeIntentText, ...aspects, ...candTexts];
+  const embeddings = await embedBatch(allTexts);
+
+  const intentEmbedding = embeddings[0];
+  const aspectEmbeddings = embeddings.slice(1, 1 + aspects.length);
+  const candEmbeddings = embeddings.slice(1 + aspects.length);
 
   const entries: FunnelEntry[] = candidates.map((candidate, i) => {
-    const similarity = clamp01((cosineSimilarity(intentEmbedding, candEmbeddings[i]) + 1) / 2);
+    const candEmb = candEmbeddings[i];
+    const wholeSim = clamp01((cosineSimilarity(intentEmbedding, candEmb) + 1) / 2);
+
+    let similarity: number;
+    if (useAspects) {
+      const aspectSims = aspectEmbeddings.map((ae) =>
+        clamp01((cosineSimilarity(ae, candEmb) + 1) / 2),
+      );
+      // Blend: the conjunctive aspect match dominates (relevance), with the
+      // whole-prompt vector as a smoothing prior so phrasing nuances still count.
+      similarity = clamp01(0.7 * conjunctiveSim(aspectSims) + 0.3 * wholeSim);
+    } else {
+      similarity = wholeSim;
+    }
+
     const prefilterScore = clamp01(
-      // Amplify semantic similarity — it's the strongest relevance gate we have.
-      // Reduce stars bias so popular-but-irrelevant repos don't crowd out
-      // semantically closer matches during funnel narrowing.
+      // Semantic similarity is the strongest relevance gate; keep stars bias low
+      // so popular-but-irrelevant repos don't crowd out closer matches.
       0.80 * similarity +
         0.11 * recencyScore(candidate.pushedAt, c.pushedWithinDays) +
         0.06 * licenseScore(candidate.licenseSpdx, c.licenses) +

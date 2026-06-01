@@ -263,10 +263,17 @@ export async function enrichReposBatch(
           data = partial;
         } else {
           console.warn(`[enrich] batch failed (${chunk.length} repos), per-repo fallback:`, err);
-          const fb = await Promise.all(chunk.map((it) => enrichRepo(it.candidate, it.similarity)));
-          fb.forEach((ev, i) => (results[base + i] = ev));
-          return;
         }
+      }
+
+      // If the batch yielded no usable data (timeout / non-partial error / null
+      // response), fall back to per-repo enrichment for the whole chunk. This
+      // guard is critical: without it, `data[`r${i}`]` below throws on undefined
+      // and rejects the entire Promise.all, failing the whole search.
+      if (!data) {
+        const fb = await Promise.all(chunk.map((it) => enrichRepo(it.candidate, it.similarity)));
+        fb.forEach((ev, i) => (results[base + i] = ev));
+        return;
       }
 
       for (let i = 0; i < chunk.length; i++) {
