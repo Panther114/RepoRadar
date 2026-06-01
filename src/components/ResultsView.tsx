@@ -1,7 +1,7 @@
 ﻿"use client";
 
 import Link from "next/link";
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { ArrowLeft, Check, Loader2, Sparkles } from "lucide-react";
 import { getSearch } from "@/lib/api/client";
@@ -32,6 +32,10 @@ export function ResultsView({ searchId }: { searchId: string }) {
       const s = q.state.data?.status;
       return s === "completed" || s === "failed" ? false : 1500;
     },
+    // Keep polling even when the tab is backgrounded, so a user who switches
+    // away during a search still returns to finished results (react-query
+    // otherwise pauses interval refetches while document.hidden).
+    refetchIntervalInBackground: true,
   });
 
   const [selected, setSelected] = useState<string[]>([]);
@@ -124,7 +128,13 @@ export function ResultsView({ searchId }: { searchId: string }) {
 
       {running && (
         <>
-          <SearchProgress stage={data?.stage} status={data?.status} progress={data?.progress ?? 0} />
+          <SearchProgress
+            stage={data?.stage}
+            status={data?.status}
+            startedAt={data?.startedAt}
+            finishedAt={data?.finishedAt}
+            etaSeconds={data?.etaSeconds}
+          />
           {results.length === 0 && <ResultSkeletons />}
         </>
       )}
@@ -282,15 +292,51 @@ function stageIndex(stage: string | null | undefined): number {
 function SearchProgress({
   stage,
   status,
-  progress,
+  startedAt,
+  finishedAt,
+  etaSeconds,
 }: {
   stage?: string | null;
   status?: string | null;
-  progress: number;
+  startedAt?: string | null;
+  finishedAt?: string | null;
+  etaSeconds?: number;
 }) {
   const active = status === "queued" ? -1 : stageIndex(stage);
   // Surface the "score 7/15" counter if present.
   const counter = stage && /\s\d+\/\d+$/.test(stage) ? stage.split(" ").pop() : null;
+
+  // ── Time-linear progress ────────────────────────────────────────────────
+  // The bar tracks elapsed wall-time, not pipeline stage: progress =
+  // elapsed / etaSeconds. `startedAt` is the server's job timestamp so the clock
+  // is correct even if the page was opened late; we fall back to the client
+  // mount time if it's missing or clock-skewed.
+  const etaMs = Math.max(1, (etaSeconds ?? 30) * 1000);
+  const done = status === "completed" || status === "failed";
+
+  const startMs = useMemo(() => {
+    const t = startedAt ? new Date(startedAt).getTime() : NaN;
+    // Guard clock skew: a start in the future or absurdly far past → use now.
+    if (!Number.isFinite(t) || t > Date.now() + 2000 || Date.now() - t > 600_000) {
+      return Date.now();
+    }
+    return t;
+  }, [startedAt]);
+
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    if (done) return;
+    const id = setInterval(() => setNow(Date.now()), 200);
+    return () => clearInterval(id);
+  }, [done]);
+
+  const endMs = done && finishedAt ? new Date(finishedAt).getTime() : now;
+  const elapsedMs = Math.max(0, (Number.isFinite(endMs) ? endMs : now) - startMs);
+  // Linear in time; hold at 99% if the search runs past the estimate, snap to
+  // 100% the instant it completes.
+  const frac = done ? 1 : Math.min(0.99, elapsedMs / etaMs);
+  const pctNum = Math.round(frac * 100);
+  const elapsedSec = Math.round(elapsedMs / 1000);
 
   return (
     <Card className="mb-4 animate-in overflow-hidden">
@@ -308,13 +354,22 @@ function SearchProgress({
               {counter && <span className="text-primary"> · {counter}</span>}
             </div>
           </div>
-          <span className="ml-auto text-sm tabular-nums text-muted-foreground">{progress}%</span>
+          <span className="ml-auto text-right text-sm tabular-nums text-muted-foreground">
+            {pctNum}%
+            <span className="ml-2 text-xs text-muted-foreground/70">
+              {elapsedSec}s / ~{Math.round(etaMs / 1000)}s
+            </span>
+          </span>
         </div>
 
         <div className="shimmer mb-4 h-1.5 overflow-hidden rounded-full bg-input">
           <div
-            className="h-full rounded-full bg-primary transition-all duration-500"
-            style={{ width: `${Math.max(progress, 4)}%` }}
+            data-testid="progress-bar-fill"
+            data-progress={pctNum}
+            data-elapsed-ms={Math.round(elapsedMs)}
+            data-eta-ms={Math.round(etaMs)}
+            className="h-full rounded-full bg-primary transition-[width] duration-200 ease-linear"
+            style={{ width: `${Math.max(pctNum, 3)}%` }}
           />
         </div>
 

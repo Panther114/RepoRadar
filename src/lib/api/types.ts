@@ -85,6 +85,12 @@ export interface SearchResponse {
   stage?: string | null;
   progress?: number;
   error?: string | null;
+  /** ISO timestamp the search job was created (server clock). Drives the time-linear progress bar. */
+  startedAt?: string | null;
+  /** ISO timestamp the job finished (completed/failed), else null. */
+  finishedAt?: string | null;
+  /** Calibrated typical total duration in seconds; progress = elapsed / etaSeconds. */
+  etaSeconds?: number;
   prompt?: string | null;
   constraints?: Record<string, unknown> | null;
   results: UiResult[];
@@ -106,4 +112,9 @@ export interface TrendsResponse {
   radar: { axis: string; value: number }[];
   fitRadar: { axis: string; value: number }[];
   releases: { total: number; last90: number; last365: number; latest: string | null };
+}
+
+export interface StarHistoryResponse {
+  fullName: string;
+  history: { date: string; stars: number }[];
 }

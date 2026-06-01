@@ -153,9 +153,9 @@ export function SearchForm() {
           onKeyDown={(e) => {
             if ((e.metaKey || e.ctrlKey) && e.key === "Enter") submit();
           }}
-          rows={3}
+          rows={2}
           placeholder="Describe the repository you need… e.g. 'a maintained TypeScript markdown editor with real-time collaboration'"
-          className="min-h-24 resize-none border-0 bg-transparent px-3 pt-3 text-sm leading-6 focus:outline-none focus:ring-0"
+          className="min-h-[56px] resize-none border-0 bg-transparent px-3 pt-3 text-sm leading-6 focus:outline-none focus:ring-0"
         />
         <div className="flex items-center justify-between gap-2 border-t border-border px-2.5 py-2">
           <div className="flex items-center gap-2">
@@ -336,15 +336,16 @@ export function SearchForm() {
       )}
 
       {/* Example prompts */}
-      <div className="mt-3">
-        <p className="mb-2 text-xs text-muted-foreground">Example searches</p>
-        <div className="flex flex-wrap gap-2">
-          {EXAMPLES.map((ex) => (
+      <div className="mt-2.5">
+        <p className="mb-1.5 text-xs text-muted-foreground">Example searches</p>
+        <div className="flex flex-wrap gap-1.5">
+          {EXAMPLES.slice(0, 4).map((ex) => (
             <button
               key={ex}
               type="button"
               onClick={() => setPrompt(ex)}
-              className="rounded-md border border-border bg-input px-2.5 py-1.5 text-left text-xs text-muted-foreground hover:border-muted hover:text-foreground"
+              className="max-w-full truncate rounded-md border border-border bg-input px-2 py-1 text-left text-xs text-muted-foreground hover:border-muted hover:text-foreground"
+              title={ex}
             >
               {ex}
             </button>

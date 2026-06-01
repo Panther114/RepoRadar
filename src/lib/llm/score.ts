@@ -81,7 +81,10 @@ export async function scoreRepo(intent: Intent, evidence: RepoEvidence): Promise
     system: SYSTEM,
     user: `USER INTENT:\n${JSON.stringify({ prompt: intent.normalizedPrompt, constraints: intent.constraints })}\n\nREPOSITORY EVIDENCE:\n${JSON.stringify(evidencePayload(evidence))}`,
     temperature: 0.2,
-    maxTokens: 1300,
+    // 1000 is enough for the scores + a few matched/missing features + a short
+    // summary; trimmed from 1300 to cut generation time on the slowest calls
+    // (output tokens dominate latency for the scoring step).
+    maxTokens: 1000,
   });
 
   if (!raw) return deterministicScore(intent, evidence);

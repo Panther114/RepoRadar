@@ -248,7 +248,9 @@ export async function extractIntent(
     // Deterministic: identical prompts must yield identical queries + normalized
     // prompt so the search/enrichment/scoring caches reliably hit on repeats.
     temperature: 0,
-    maxTokens: 900,
+    // 768 covers the structured intent (aspects + keywords + 4-8 queries);
+    // trimmed from 900 to shave intent latency without dropping any field.
+    maxTokens: 768,
     // Use the fast intent model — this is structured extraction, not deep reasoning.
     model: INTENT_MODEL,
   });

@@ -18,6 +18,7 @@ import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { ScoreBadge, scoreColor, pct } from "@/components/ScoreBadge";
+import { StarHistorySparkline } from "@/components/StarHistorySparkline";
 import { cn } from "@/lib/utils";
 import { formatNumber, ownerNameFromFullName, timeAgo } from "@/lib/format";
 import type { UiResult, UiDocs } from "@/lib/api/types";
@@ -102,13 +103,12 @@ export function RepoCard({
   selected,
   onToggleSelect,
   defaultTab,
-  maxStars,
 }: {
   result: UiResult;
   selected?: boolean;
   onToggleSelect?: (fullName: string) => void;
   defaultTab?: Tab;
-  /** Largest star count in the current result set — drives the relative star bar. */
+  /** Largest star count in the current result set (unused; kept for compatibility). */
   maxStars?: number;
 }) {
   const [open, setOpen] = useState(false);
@@ -126,13 +126,6 @@ export function RepoCard({
   const isHealthy = (issueCloseRate ?? 0) > 0.7 && (prMergeRate ?? 0) > 0.6;
 
   const topics = (repo.topics ?? []).slice(0, 5);
-
-  // Relative star magnitude within the result set (log scale reads better across
-  // the long tail of star counts).
-  const starRatio =
-    maxStars && maxStars > 0 && metrics?.stars
-      ? Math.log10(metrics.stars + 1) / Math.log10(maxStars + 1)
-      : null;
 
   return (
     <Card
@@ -250,27 +243,10 @@ export function RepoCard({
           </span>
         </div>
 
-        {/* -- Relative star magnitude (within this result set) -------------- */}
-        {starRatio != null && (
-          <div
-            className="flex items-center gap-2 px-3 pb-1 pt-0.5"
-            title="Star magnitude relative to this result set (log scale)"
-          >
-            <Star className="h-3 w-3 shrink-0 text-[#d29922]" />
-            <div className="h-1 max-w-[180px] flex-1 overflow-hidden rounded-full bg-input">
-              <div
-                className="h-full rounded-full bg-[#d29922]"
-                style={{
-                  width: `${Math.round(starRatio * 100)}%`,
-                  transition: "width 0.6s cubic-bezier(0.22,1,0.36,1)",
-                }}
-              />
-            </div>
-            <span className="text-[10px] tabular-nums text-muted-foreground/70">
-              {formatNumber(metrics?.stars)}★
-            </span>
-          </div>
-        )}
+        {/* -- Star history (real curve, sampled from GitHub) --------------- */}
+        <div className="border-t border-border/60">
+          <StarHistorySparkline owner={owner} name={name} stars={metrics?.stars} />
+        </div>
 
         {/* -- AI summary --------------------------------------------------- */}
         {analysis?.summary && (

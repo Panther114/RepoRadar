@@ -1,6 +1,7 @@
 import type {
   SearchFiltersInput,
   SearchResponse,
+  StarHistoryResponse,
   TrendsResponse,
 } from "@/lib/api/types";
 
@@ -104,5 +105,18 @@ export async function getRepoTrends(
 ): Promise<TrendsResponse> {
   const res = await fetch(`/api/repo/${owner}/${name}/trends`, { cache: "no-store" });
   if (!res.ok) throw new Error(`Could not load trends (${res.status})`);
+  return res.json();
+}
+
+export async function getStarHistory(
+  owner: string,
+  name: string,
+  stars: number,
+): Promise<StarHistoryResponse> {
+  const res = await fetch(
+    `/api/repo/${encodeURIComponent(owner)}/${encodeURIComponent(name)}/star-history?stars=${stars}`,
+    { cache: "no-store" },
+  );
+  if (!res.ok) return { fullName: `${owner}/${name}`, history: [] };
   return res.json();
 }
