@@ -1,0 +1,23 @@
+# Local Postgres + pgvector for RepoRadar.
+# Usage: docker compose up -d   (then `pnpm db:deploy`)
+services:
+  db:
+    image: pgvector/pgvector:pg16
+    container_name: reporadar-db
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: reporadar
+      POSTGRES_PASSWORD: reporadar
+      POSTGRES_DB: reporadar
+    ports:
+      - "5432:5432"
+    volumes:
+      - reporadar_pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U reporadar -d reporadar"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+volumes:
+  reporadar_pgdata:

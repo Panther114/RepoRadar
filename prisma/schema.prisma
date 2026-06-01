@@ -1,0 +1,187 @@
+// RepoRadar Prisma schema — maps to REPORADAR.md §9 plus a search_jobs table.
+// Vector columns use pgvector; the `vector` extension is created via the
+// postgresqlExtensions preview feature. Embeddings are read/written with raw
+// SQL (Prisma has no native vector mapping), so they're typed Unsupported.
+
+generator client {
+  provider        = "prisma-client-js"
+  previewFeatures = ["postgresqlExtensions"]
+}
+
+datasource db {
+  provider   = "postgresql"
+  url        = env("DATABASE_URL")
+  extensions = [vector]
+}
+
+model Repo {
+  id              String   @id @default(uuid()) @db.Uuid
+  githubId        BigInt   @unique @map("github_id")
+  fullName        String   @unique @map("full_name")
+  owner           String
+  name            String
+  htmlUrl         String   @map("html_url")
+  description     String?
+  primaryLanguage String?  @map("primary_language")
+  licenseSpdx     String?  @map("license_spdx")
+  topics          String[]
+  isArchived      Boolean  @default(false) @map("is_archived")
+  isFork          Boolean  @default(false) @map("is_fork")
+  createdAt       DateTime? @map("created_at")
+  updatedAt       DateTime? @map("updated_at")
+  pushedAt        DateTime? @map("pushed_at")
+  fetchedAt       DateTime @default(now()) @map("fetched_at")
+
+  snapshots  RepoSnapshot[]
+  readmes    RepoReadme[]
+  embeddings RepoEmbedding[]
+  results    SearchResult[]
+  analyses   ModelAnalysis[]
+  enrichment RepoEnrichment?
+
+  @@map("repos")
+}
+
+// Cached deep-enrichment evidence (README, issue/PR/release/contributor signals,
+// manifests, docs signals) keyed 1:1 per repo. Lets repeated or overlapping
+// searches skip the expensive GitHub round-trip. Refreshed when older than the
+// configured TTL. The volatile bits (stars, similarity) are NOT stored here —
+// they come fresh from the live candidate on each search.
+model RepoEnrichment {
+  id           String   @id @default(uuid()) @db.Uuid
+  repoId       String   @unique @map("repo_id") @db.Uuid
+  evidenceJson Json     @map("evidence_json")
+  enrichedAt   DateTime @default(now()) @map("enriched_at")
+
+  repo Repo @relation(fields: [repoId], references: [id], onDelete: Cascade)
+
+  @@index([enrichedAt])
+  @@map("repo_enrichments")
+}
+
+model RepoSnapshot {
+  id           String   @id @default(uuid()) @db.Uuid
+  repoId       String   @map("repo_id") @db.Uuid
+  stars        Int?
+  forks        Int?
+  watchers     Int?
+  openIssues   Int?     @map("open_issues")
+  subscribers  Int?
+  networkCount Int?     @map("network_count")
+  fetchedAt    DateTime @default(now()) @map("fetched_at")
+
+  repo Repo @relation(fields: [repoId], references: [id], onDelete: Cascade)
+
+  @@index([repoId])
+  @@map("repo_snapshots")
+}
+
+model RepoReadme {
+  id               String   @id @default(uuid()) @db.Uuid
+  repoId           String   @map("repo_id") @db.Uuid
+  content          String?
+  contentHash      String?  @map("content_hash")
+  truncatedContent String?  @map("truncated_content")
+  fetchedAt        DateTime @default(now()) @map("fetched_at")
+
+  repo Repo @relation(fields: [repoId], references: [id], onDelete: Cascade)
+
+  @@index([repoId])
+  @@map("repo_readmes")
+}
+
+model RepoEmbedding {
+  id         String                       @id @default(uuid()) @db.Uuid
+  repoId     String                       @map("repo_id") @db.Uuid
+  embedding  Unsupported("vector(384)")?
+  sourceType String                       @map("source_type")
+  sourceHash String                       @map("source_hash")
+  createdAt  DateTime                     @default(now()) @map("created_at")
+
+  repo Repo @relation(fields: [repoId], references: [id], onDelete: Cascade)
+
+  @@unique([repoId, sourceType])
+  @@index([repoId])
+  @@map("repo_embeddings")
+}
+
+// Cached GitHub candidate-search results, keyed by the normalized prompt +
+// filters. Lets repeated/refined searches skip the (slow) GitHub Search API.
+// Short TTL since new repos appear continuously.
+model SearchCandidateCache {
+  id             String   @id @default(uuid()) @db.Uuid
+  queryHash      String   @unique @map("query_hash")
+  candidatesJson Json     @map("candidates_json")
+  createdAt      DateTime @default(now()) @map("created_at")
+
+  @@index([createdAt])
+  @@map("search_candidate_caches")
+}
+
+model SearchQuery {
+  id                   String                       @id @default(uuid()) @db.Uuid
+  rawPrompt            String                       @map("raw_prompt")
+  normalizedPrompt     String?                      @map("normalized_prompt")
+  extractedConstraints Json?                        @map("extracted_constraints")
+  intentHash           String?                      @map("intent_hash")
+  intentEmbedding      Unsupported("vector(384)")?  @map("intent_embedding")
+  createdAt            DateTime                     @default(now()) @map("created_at")
+
+  results  SearchResult[]
+  analyses ModelAnalysis[]
+  jobs     SearchJob[]
+
+  @@map("search_queries")
+}
+
+model SearchResult {
+  id              String   @id @default(uuid()) @db.Uuid
+  searchQueryId   String   @map("search_query_id") @db.Uuid
+  repoId          String   @map("repo_id") @db.Uuid
+  rank            Int?
+  fitScore        Float?   @map("fit_score")
+  futureScore     Float?   @map("future_score")
+  underratedScore Float?   @map("underrated_score")
+  totalScore      Float?   @map("total_score")
+  scoreBreakdown  Json?    @map("score_breakdown")
+  createdAt       DateTime @default(now()) @map("created_at")
+
+  searchQuery SearchQuery @relation(fields: [searchQueryId], references: [id], onDelete: Cascade)
+  repo        Repo        @relation(fields: [repoId], references: [id], onDelete: Cascade)
+
+  @@index([searchQueryId])
+  @@map("search_results")
+}
+
+model ModelAnalysis {
+  id            String   @id @default(uuid()) @db.Uuid
+  repoId        String   @map("repo_id") @db.Uuid
+  searchQueryId String?  @map("search_query_id") @db.Uuid
+  modelName     String   @map("model_name")
+  inputHash     String   @map("input_hash")
+  outputJson    Json     @map("output_json")
+  createdAt     DateTime @default(now()) @map("created_at")
+
+  repo        Repo         @relation(fields: [repoId], references: [id], onDelete: Cascade)
+  searchQuery SearchQuery? @relation(fields: [searchQueryId], references: [id], onDelete: SetNull)
+
+  @@unique([inputHash])
+  @@index([repoId])
+  @@map("model_analyses")
+}
+
+model SearchJob {
+  id            String   @id @default(uuid()) @db.Uuid
+  searchQueryId String   @map("search_query_id") @db.Uuid
+  status        String   @default("queued") // queued | running | completed | failed
+  stage         String?
+  progress      Int      @default(0)
+  error         String?
+  createdAt     DateTime @default(now()) @map("created_at")
+  updatedAt     DateTime @updatedAt @map("updated_at")
+
+  searchQuery SearchQuery @relation(fields: [searchQueryId], references: [id], onDelete: Cascade)
+
+  @@index([searchQueryId])
+  @@map("search_jobs")
+}

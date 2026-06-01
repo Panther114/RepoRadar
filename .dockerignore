@@ -1,0 +1,15 @@
+node_modules
+.next
+.git
+.env
+.env.*
+!.env.example
+devlog.txt
+*.tsbuildinfo
+npm-debug.log*
+.pnpm-debug.log*
+README.md
+REPORADAR.md
+PLAN.md
+PROGRESS.md
+setup.txt
