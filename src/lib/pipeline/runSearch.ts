@@ -168,35 +168,41 @@ export async function runSearch(
     await setJob(searchQueryId, { stage: "search", progress: 20 });
     const doneSearch = searchLog.time("GitHub candidate search");
 
-    // If the LLM produced different queries, check cache for those too.
-    // If present, prefer them (better signal); otherwise use the heuristic results.
+    // LLM-first strategy: the LLM intent always wins when it differs from the
+    // heuristic. The heuristic search that ran in parallel is kept as a fallback
+    // (zero-cost since it already ran) but we prefer the LLM's richer queries.
     let candidates: Awaited<ReturnType<typeof searchCandidates>>;
     const llmHash = hashJson({ q: [...intent.queries].sort(), max: env.MAX_CANDIDATES });
     const llmQueriesDiffer = llmHash !== hashJson({ q: [...heuristic.queries].sort(), max: env.MAX_CANDIDATES });
 
     if (llmQueriesDiffer) {
+      // Check if we already have cached results for the LLM queries.
       const llmCached = await loadCandidateCache(llmHash, searchTtlMs).catch(() => null);
       if (llmCached && llmCached.length > 0) {
         candidates = llmCached;
         searchLog.info("Candidates found (LLM cache hit)", { count: candidates.length });
-      } else if (heuristicCandidates.candidates.length > 0) {
-        // Heuristic results are good enough; avoid a second GitHub round-trip
-        candidates = heuristicCandidates.candidates;
-        searchLog.info("Candidates found (heuristic, parallel)", {
-          count: candidates.length,
-          fromCache: heuristicCandidates.fromCache,
-        });
       } else {
-        // Both heuristic and cache empty — do a fresh LLM-query search
+        // Run the LLM queries — they're richer, topic-aware, and expanded.
+        // Do NOT prefer the heuristic results: we want what the LLM asked for.
         candidates = await searchCandidates(intent.queries, intent.constraints, {
           maxPool: env.MAX_CANDIDATES,
         });
         saveCandidateCache(llmHash, candidates).catch(() => {});
         searchLog.info("Candidates found (LLM fresh search)", { count: candidates.length });
+
+        // Only fall back to the parallel heuristic results if LLM search failed.
+        if (candidates.length === 0 && heuristicCandidates.candidates.length > 0) {
+          candidates = heuristicCandidates.candidates;
+          searchLog.info("Fallback to heuristic candidates (LLM search empty)", {
+            count: candidates.length,
+          });
+        }
       }
     } else {
+      // LLM produced the same queries as heuristic (or LLM was disabled/failed).
+      // Use the already-available heuristic results — no extra round-trip needed.
       candidates = heuristicCandidates.candidates;
-      searchLog.info("Candidates found", {
+      searchLog.info("Candidates found (heuristic / same queries)", {
         count: candidates.length,
         fromCache: heuristicCandidates.fromCache,
       });

@@ -40,12 +40,16 @@ export function parseJsonLoose<T = unknown>(text: string): T | null {
 /**
  * Run a strict-JSON chat completion against OpenRouter. Returns null if the LLM
  * is disabled or the call/parse fails (callers fall back deterministically).
+ *
+ * Pass `model` to override the default LLM_MODEL (e.g. use INTENT_MODEL for
+ * intent extraction, which needs speed over depth).
  */
 export async function chatJson<T = unknown>(args: {
   system: string;
   user: string;
   temperature?: number;
   maxTokens?: number;
+  model?: string;
 }): Promise<T | null> {
   const client = getLlmClient();
   if (!client) return null;
@@ -63,7 +67,7 @@ export async function chatJson<T = unknown>(args: {
     try {
       const completion = await client.chat.completions.create(
         {
-          model: LLM_MODEL,
+          model: args.model ?? LLM_MODEL,
           temperature: args.temperature ?? 0.2,
           max_tokens: args.maxTokens ?? 1500,
           response_format: { type: "json_object" },

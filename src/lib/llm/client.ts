@@ -23,3 +23,6 @@ export function getLlmClient(): OpenAI | null {
 }
 
 export const LLM_MODEL = env.OPENROUTER_MODEL;
+
+/** Fast model used only for intent extraction (short structured task). Falls back to LLM_MODEL. */
+export const INTENT_MODEL = env.INTENT_MODEL || env.OPENROUTER_MODEL;

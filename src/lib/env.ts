@@ -8,14 +8,19 @@ const schema = z.object({
   DATABASE_URL: z.string().min(1, "DATABASE_URL is required"),
   GITHUB_TOKEN: z.string().optional().default(""),
   OPENROUTER_API_KEY: z.string().optional().default(""),
-  OPENROUTER_MODEL: z.string().optional().default("meta-llama/llama-3.3-70b-instruct"),
+  OPENROUTER_MODEL: z.string().optional().default("google/gemini-2.0-flash-001"),
+  // Separate fast model used only for intent extraction (simpler task, needs sub-second latency).
+  // Falls back to OPENROUTER_MODEL when unset.
+  INTENT_MODEL: z.string().optional().default(""),
   // Comma-separated OpenRouter provider preference order (e.g. "Groq,Cerebras").
   // Empty = let OpenRouter pick. Pinning Groq gives the lowest latency.
   OPENROUTER_PROVIDER: z.string().optional().default(""),
+  // LLM is ON by default whenever OPENROUTER_API_KEY is present.
+  // Set NO_LLM_MODE=true to force heuristic-only (free/offline) mode.
   NO_LLM_MODE: z
     .string()
     .optional()
-    .default("true")
+    .default("false")
     .transform((v) => v.toLowerCase() === "true"),
   FUNNEL_TOP_N: z
     .string()

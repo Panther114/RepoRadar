@@ -1,6 +1,7 @@
 import { z } from "zod";
 import type { Constraints, Intent, ProjectType, SearchFilters } from "@/lib/types";
 import { chatJson } from "@/lib/llm/json";
+import { INTENT_MODEL } from "@/lib/llm/client";
 
 const PROJECT_TYPES: ProjectType[] = [
   "library", "framework", "cli", "app", "template", "demo", "research",
@@ -122,6 +123,7 @@ export function buildQueries(c: Constraints, rawPrompt: string): string[] {
   // Keep at most 3 keywords per focused query; too many terms → 0 GitHub hits.
   const kw3 = kws.slice(0, 3).join(" ");
   const kw2 = kws.slice(0, 2).join(" ");
+  const kw1 = kws[0] ?? "";
   const langQ = c.language ? ` language:${c.language}` : "";
   const starsQ = c.minStars ? ` stars:>=${c.minStars}` : "";
   const pushed = c.pushedWithinDays
@@ -131,15 +133,23 @@ export function buildQueries(c: Constraints, rawPrompt: string): string[] {
     : "";
 
   // OR query — any matching keyword is enough, much better recall.
-  const orTerms = kws.slice(0, 4).join(" OR ");
+  const orTerms = kws.slice(0, 5).join(" OR ");
+
+  // Topic-based query — GitHub topics are curator-applied, high signal.
+  const topicQ = kws
+    .slice(0, 2)
+    .map((k) => `topic:${k.toLowerCase().replace(/\s+/g, "-")}`)
+    .join(" ");
 
   const variants = [
-    `${kw3}${langQ}${starsQ}`,                    // focused: 3 kw + language
-    orTerms ? `${orTerms}${langQ}${starsQ}` : "", // OR — broad recall (2nd so it's in the 2-query slot)
-    `${kw3}${langQ}${pushed}`,                    // + recency
-    kw2 ? `${kw2} in:readme${langQ}` : "",        // README search
-    kw2 ? `${kw2}${langQ} stars:<2000` : "",      // underrated discovery
-    kw3 ? `${kw3}` : "",                          // no-language fallback
+    `${kw3}${langQ}${starsQ}`,                         // focused: 3 kw + language
+    orTerms ? `${orTerms}${langQ}${starsQ}` : "",       // OR — broad recall
+    topicQ ? `${topicQ}${langQ}` : "",                  // topic: — curator-quality signal
+    `${kw3}${langQ}${pushed}`,                          // + recency filter
+    kw2 ? `${kw2} in:readme${langQ}` : "",              // README full-text search
+    kw2 ? `${kw2}${langQ} stars:<1000` : "",            // underrated discovery
+    kw1 ? `${kw1}${langQ} stars:>100` : "",             // popular + broad
+    kw3 ? `${kw3}` : "",                                // no-language fallback
   ];
 
   // De-dup, drop empties, keep order.
@@ -153,22 +163,47 @@ export function buildQueries(c: Constraints, rawPrompt: string): string[] {
   return out;
 }
 
-const INTENT_SYSTEM = `You are RepoRadar's query analyst. Convert a developer's natural-language request for an open-source GitHub repository into structured search intent.
-Return ONLY a JSON object with this shape:
+const INTENT_SYSTEM = `You are RepoRadar's search architect. Convert a developer's natural-language request into rich, expanded search intent optimised for GitHub repository discovery.
+
+━━━ SHORT PROMPT EXPANSION (CRITICAL) ━━━
+When a prompt is short or vague, EXPAND aggressively with domain knowledge. Think like an expert who knows every major library, framework, and ecosystem term.
+
+Examples of required expansion:
+• "auth library" → authentication, JWT, OAuth2, sessions, PKCE, login, signup, cookies, NextAuth, Lucia, Clerk, BetterAuth, PassportJS, Auth.js
+• "rich text editor" → WYSIWYG, markdown, ProseMirror, CodeMirror, Slate, TipTap, Lexical, Quill, BlockNote, rich-text
+• "vector database" → embeddings, similarity search, pgvector, Qdrant, Weaviate, Milvus, Chroma, ANN, HNSW
+• "state management" → Redux, Zustand, Jotai, Recoil, Valtio, MobX, context, store, reactive
+• "form validation" → schema, Zod, Yup, react-hook-form, Formik, validation, input
+• "AI coding assistant" → LLM, code generation, copilot, autocomplete, agent, code completion, Claude, Codex
+• "local-first" → offline, CRDT, sync, Yjs, Automerge, conflict-free, peer-to-peer
+• "Notion-like" → block editor, workspace, wiki, note-taking, ProseMirror, block-based, TipTap
+• "RAG" → retrieval-augmented generation, vector search, embeddings, chunking, langchain, llamaindex
+
+━━━ QUERY GENERATION RULES ━━━
+Generate 6-8 DIVERSE GitHub search queries. Mix ALL of these strategies:
+1. Focused keyword + language filter: "block editor markdown language:TypeScript"
+2. OR broad recall: "prosemirror OR tiptap OR lexical OR slate language:TypeScript"
+3. Topic-based (HIGH SIGNAL — GitHub topics are curator-applied): "topic:markdown-editor topic:wysiwyg"
+4. README full-text (catches less-tagged repos): "block editor local-first in:readme"
+5. Underrated/small (for hidden gems): "block editor language:TypeScript stars:<500"
+6. Popular + discovery: "markdown editor stars:>500 language:TypeScript"
+7. No-language fallback (catches polyglot): "block editor local-first CRDT"
+
+━━━ OUTPUT ━━━
+Return ONLY this JSON object (no prose, no markdown fences):
 {
-  "normalizedPrompt": string,
-  "keywords": string[],            // 3-8 concise search terms, no stopwords
-  "requiredFeatures": string[],    // concrete capabilities the repo must have
-  "language": string | null,       // canonical GitHub language name or null
-  "licenses": string[],            // e.g. ["MIT","Apache-2.0"], [] if unspecified
-  "pushedWithinDays": number|null, // recency requirement in days, else null
-  "projectType": one of ["library","framework","cli","app","template","demo","research","tutorial","awesome-list","plugin","extension","dataset","any"],
-  "includeSmallProjects": boolean, // true if user wants small/underrated repos
-  "minStars": number|null,
-  "maxStars": number|null,
-  "queries": string[]              // 3-6 GitHub search query strings (may use language:, topic:, in:readme, stars:, pushed:)
-}
-No prose, no markdown — JSON only.`;
+  "normalizedPrompt": string,        // 1-sentence restatement clarifying the intent
+  "keywords": string[],              // 6-10 concise search terms — include known library names!
+  "requiredFeatures": string[],      // concrete capabilities the repo MUST demonstrate
+  "language": string | null,         // canonical GitHub language name, or null
+  "licenses": string[],              // ["MIT","Apache-2.0"] etc., [] if unspecified
+  "pushedWithinDays": number | null, // recency constraint in days, or null
+  "projectType": "library" | "framework" | "cli" | "app" | "template" | "demo" | "research" | "tutorial" | "awesome-list" | "plugin" | "extension" | "dataset" | "any",
+  "includeSmallProjects": boolean,   // true when user wants underrated/small repos
+  "minStars": number | null,
+  "maxStars": number | null,
+  "queries": string[]                // 6-8 diverse GitHub search query strings
+}`;
 
 /** Extract intent via the LLM, falling back to heuristics. */
 export async function extractIntent(
@@ -179,11 +214,13 @@ export async function extractIntent(
 
   const raw = await chatJson<unknown>({
     system: INTENT_SYSTEM,
-    user: `Request: ${prompt}\n\nOptional filters: ${JSON.stringify(filters ?? {})}`,
+    user: `Developer request: "${prompt}"\n\nUI filters already applied: ${JSON.stringify(filters ?? {})}`,
     // Deterministic: identical prompts must yield identical queries + normalized
     // prompt so the search/enrichment/scoring caches reliably hit on repeats.
     temperature: 0,
-    maxTokens: 700,
+    maxTokens: 900,
+    // Use the fast intent model — this is structured extraction, not deep reasoning.
+    model: INTENT_MODEL,
   });
   if (!raw) return fallback;
 
@@ -208,7 +245,7 @@ export async function extractIntent(
   );
 
   const queries =
-    d.queries?.length ? d.queries.slice(0, 6) : buildQueries(constraints, prompt);
+    d.queries?.length ? d.queries.slice(0, 8) : buildQueries(constraints, prompt);
 
   return {
     normalizedPrompt: d.normalizedPrompt?.trim() || prompt.trim(),

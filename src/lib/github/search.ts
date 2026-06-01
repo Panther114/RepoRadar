@@ -62,9 +62,12 @@ export async function searchCandidates(
   _constraints: Constraints,
   options: SearchOptions = {},
 ): Promise<Candidate[]> {
+  // 20 results per query keeps the ONNX embedding batch at a safe size.
+  // Breadth comes from 6 DIVERSE query strategies (topic:, OR, in:readme, etc.)
+  // not from more results per query. 6×20 = up to 120 raw, ~60-80 after dedup.
   const perQuery = options.perQuery ?? 20;
-  const maxPool = options.maxPool ?? 120;
-  const maxQueries = options.maxQueries ?? (Number(process.env.MAX_SEARCH_QUERIES) || 4);
+  const maxPool = options.maxPool ?? 80;
+  const maxQueries = options.maxQueries ?? (Number(process.env.MAX_SEARCH_QUERIES) || 6);
 
   const byId = new Map<number, Candidate>();
 
