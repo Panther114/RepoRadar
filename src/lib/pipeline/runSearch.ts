@@ -364,7 +364,27 @@ export async function runSearch(
     searchLog.info("Analysis complete", { scoredCount: scored.length });
 
     // ── Stage 5: Persist ranked results ──────────────────────────────────────
-    scored.sort((a, b) => b.analysis.total - a.analysis.total);
+    // Rank by RELEVANCE (fit + similarity), not quality (total).
+    //
+    // `total` is shown to users as a quality indicator but must not drive rank:
+    // a wildly popular repo with a high health/future score can have total=0.77
+    // while a perfectly on-point small new repo has total=0.53. That would bury
+    // the best result. Health is a displayed signal, not a ranking signal.
+    //
+    //   - AI-scored: LLM fit is semantically precise → weight it heavily.
+    //   - Deterministic: ONNX similarity is the best raw relevance signal →
+    //     blend it equally with the noisier keyword-based fit score.
+    const rankScore = (s: (typeof scored)[0]): number => {
+      const sim = s.evidence.similarity;
+      if (s.analysis.source === "ai") {
+        // Trust the LLM's fit judgement; similarity is a minor tiebreaker.
+        return s.analysis.fit * 0.85 + sim * 0.15;
+      }
+      // Deterministic: fit and similarity are complementary signals of the
+      // same underlying relevance — blend them equally.
+      return s.analysis.fit * 0.60 + sim * 0.40;
+    };
+    scored.sort((a, b) => rankScore(b) - rankScore(a));
 
     const minFuture = filters?.minFutureScore ?? null;
     let rank = 1;

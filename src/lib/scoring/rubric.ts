@@ -4,12 +4,15 @@
 // compute the blended total. They are NOT used to override AI scores.
 
 export const FIT_WEIGHTS = {
-  semantic_similarity: 0.4,
-  explicit_feature_match: 0.2,
-  language_framework_match: 0.15,
-  package_manifest_match: 0.1,
-  constraint_satisfaction: 0.1,
-  repository_type_match: 0.05,
+  // ONNX embedding cosine similarity is our strongest relevance signal in
+  // deterministic mode and a useful secondary signal with LLM. Amplify it.
+  semantic_similarity: 0.55,
+  explicit_feature_match: 0.20,
+  language_framework_match: 0.10,
+  // Manifest/constraint signals are noisy for non-library queries — reduce.
+  package_manifest_match: 0.07,
+  constraint_satisfaction: 0.05,
+  repository_type_match: 0.03,
 } as const;
 
 export const FUTURE_WEIGHTS = {
@@ -44,13 +47,14 @@ export function weighted(
 }
 
 /**
- * The blended headline score. Emphasizes fit + future; underrated nudges
- * smaller high-quality repos up without dominating.
+ * The blended headline score.
+ * Fit (semantic relevance) dominates. Future (health) matters but cannot
+ * rescue an irrelevant result. Underrated is a small nudge only.
  */
 export function computeTotal(
   fit: number,
   future: number,
   underrated: number,
 ): number {
-  return clamp01(0.5 * fit + 0.4 * future + 0.1 * underrated);
+  return clamp01(0.62 * fit + 0.33 * future + 0.05 * underrated);
 }

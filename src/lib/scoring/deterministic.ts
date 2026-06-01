@@ -59,19 +59,51 @@ export function deterministicScore(intent: Intent, e: RepoEvidence): Analysis {
 
   // --- Fit components ---
   const features = c.requiredFeatures.length ? c.requiredFeatures : c.keywords;
+
+  // Tiered matching: matches in name/description are strong evidence of
+  // relevance; topic matches are medium; README-only matches are weak
+  // (coincidental appearances are common in long READMEs).
+  const nameDesc = [e.candidate.fullName, e.candidate.description ?? ""]
+    .join(" ")
+    .toLowerCase();
+  const topicsText = e.candidate.topics.join(" ").toLowerCase();
+
   const matchedFeatures: MatchedFeature[] = [];
   const missingFeatures: MissingFeature[] = [];
+  let featureScoreSum = 0;
+
   for (const f of features) {
-    const present = f
+    const toks = f
       .toLowerCase()
       .split(/\s+/)
-      .every((tok) => tok.length < 3 || text.includes(tok));
-    if (present) {
+      .filter((t) => t.length >= 3);
+    if (toks.length === 0) continue;
+
+    const inNameDesc = toks.every((tok) => nameDesc.includes(tok));
+    const inTopics = toks.some((tok) => topicsText.includes(tok));
+    const inReadme = toks.every((tok) => text.includes(tok));
+
+    if (inNameDesc) {
       matchedFeatures.push({
         feature: f,
-        evidence: "Mentioned in repository description, topics, or README.",
-        confidence: 0.7,
+        evidence: "Found in repository name or description.",
+        confidence: 0.9,
       });
+      featureScoreSum += 1.0;
+    } else if (inTopics) {
+      matchedFeatures.push({
+        feature: f,
+        evidence: "Found in repository topics.",
+        confidence: 0.75,
+      });
+      featureScoreSum += 0.7;
+    } else if (inReadme) {
+      matchedFeatures.push({
+        feature: f,
+        evidence: "Mentioned in README.",
+        confidence: 0.45,
+      });
+      featureScoreSum += 0.35;
     } else {
       missingFeatures.push({
         feature: f,
@@ -80,8 +112,9 @@ export function deterministicScore(intent: Intent, e: RepoEvidence): Analysis {
       });
     }
   }
-  const featureMatch = features.length
-    ? matchedFeatures.length / features.length
+
+  const featureMatch = features.length > 0
+    ? featureScoreSum / features.length
     : e.similarity;
 
   const langMatch = !c.language
@@ -90,11 +123,16 @@ export function deterministicScore(intent: Intent, e: RepoEvidence): Analysis {
       ? 1
       : 0.3;
 
+  // Manifest penalty only applies when we're explicitly looking for a packaged
+  // library/framework. Skills catalogs, awesome lists, and doc collections
+  // legitimately have no package.json — don't penalise them.
+  const noManifestScore =
+    c.projectType === "library" || c.projectType === "framework" ? 0.3 : 0.60;
   const manifestMatch = e.manifests.length
     ? e.manifests.some((m) => m.hasDeps)
       ? 1
       : 0.7
-    : 0.3;
+    : noManifestScore;
 
   const licenseOk =
     c.licenses.length === 0 ||

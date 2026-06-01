@@ -84,10 +84,13 @@ export async function narrowCandidates(
   const entries: FunnelEntry[] = candidates.map((candidate, i) => {
     const similarity = clamp01((cosineSimilarity(intentEmbedding, candEmbeddings[i]) + 1) / 2);
     const prefilterScore = clamp01(
-      0.7 * similarity +
-        0.12 * recencyScore(candidate.pushedAt, c.pushedWithinDays) +
-        0.1 * licenseScore(candidate.licenseSpdx, c.licenses) +
-        0.08 * starsScore(candidate.stars, c.includeSmallProjects),
+      // Amplify semantic similarity — it's the strongest relevance gate we have.
+      // Reduce stars bias so popular-but-irrelevant repos don't crowd out
+      // semantically closer matches during funnel narrowing.
+      0.80 * similarity +
+        0.11 * recencyScore(candidate.pushedAt, c.pushedWithinDays) +
+        0.06 * licenseScore(candidate.licenseSpdx, c.licenses) +
+        0.03 * starsScore(candidate.stars, c.includeSmallProjects),
     );
     return { candidate, similarity, prefilterScore, intentEmbedding };
   });
