@@ -118,7 +118,8 @@ pnpm dev
 
 Open **http://localhost:2000** and search. Full instructions (env vars, API key, troubleshooting,
 moving machines) are in **[`setup.txt`](./setup.txt)**, and the architecture + status live in
-**[`PLAN.md`](./PLAN.md)** and **[`PROGRESS.md`](./PROGRESS.md)**.
+**[`PLAN.md`](./PLAN.md)** and **[`PROGRESS.md`](./PROGRESS.md)**. The top bar also includes an
+**About** page that explains the pipeline and the score composition.
 
 ---
 

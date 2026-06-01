@@ -208,6 +208,10 @@ export function SearchForm() {
         </div>
       </div>
 
+      <p className="mt-2 text-[11px] text-muted-foreground">
+        Fresh searches usually take about 40 seconds.
+      </p>
+
       {error && (
         <p className="mt-2 flex items-center gap-1.5 text-sm text-[#f85149]">
           {error}

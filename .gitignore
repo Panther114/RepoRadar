@@ -37,6 +37,7 @@ yarn-error.log*
 # local dev artifacts
 devlog.txt
 dev-*.txt
+prod-*.txt
 /logs/*.log
 
 # vercel

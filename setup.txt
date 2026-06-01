@@ -104,7 +104,8 @@ TROUBLESHOOTING
   page pre-warms /api/search; each POST /api/search logs a requestId, queued
   searchQueryId, browser user-agent/referrer, background pipeline launch, and
   pipeline stage timings. The browser console also logs route warm-up, POST
-  completion, navigation, and result polling state.
+  completion, navigation, and result polling state. Fresh searches usually
+  take about 40 seconds.
 - You see `ChunkLoadError: Loading chunk app/layout failed` -> the browser is on
   a stale dev bundle. Hard reload the page or restart `pnpm dev` after clearing
   `.next`; the root layout is server-only now, and React Query lives only on the

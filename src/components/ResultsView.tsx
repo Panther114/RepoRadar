@@ -311,7 +311,7 @@ function SearchProgress({
   // elapsed / etaSeconds. `startedAt` is the server's job timestamp so the clock
   // is correct even if the page was opened late; we fall back to the client
   // mount time if it's missing or clock-skewed.
-  const etaMs = Math.max(1, (etaSeconds ?? 30) * 1000);
+  const etaMs = Math.max(1, (etaSeconds ?? 40) * 1000);
   const done = status === "completed" || status === "failed";
 
   const startMs = useMemo(() => {
@@ -352,6 +352,9 @@ function SearchProgress({
                 ? PIPELINE_STAGES[active].label
                 : "Starting up"}
               {counter && <span className="text-primary"> · {counter}</span>}
+              <span className="ml-2 text-muted-foreground/80">
+                About 40 seconds on a fresh search.
+              </span>
             </div>
           </div>
           <span className="ml-auto text-right text-sm tabular-nums text-muted-foreground">

@@ -145,6 +145,8 @@ This drive (`E:`) is **exFAT**, which has no symlink support. To work around tha
   shows a visible debug status while the job is being created, and hard-navigates to the result URL as
   soon as the queued `searchId` is returned. `GET /api/search` is a lightweight readiness endpoint for
   warming and diagnostics.
+- **Search ETA**: the default estimate is now 40 seconds, and the UI explicitly says fresh searches
+  usually take about 40 seconds.
 - **Results-route stability**: the React Query provider is now scoped to the results route instead of
   the root app shell, which removes the `app/layout.js` chunk from the critical navigation path and
   avoids the dev-only `ChunkLoadError` / stale shell crash.
