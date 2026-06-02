@@ -4,11 +4,8 @@ RepoRadar is for developers who need better open-source discovery than keyword s
 
 ## Good first contributions
 
-- Add parsers for more package manifests.
-- Improve deterministic scoring evidence in `src/lib/scoring`.
-- Tune GitHub query expansion for real search examples.
-- Improve empty, loading, or failed states in the UI.
-- Add docs for deployment and self-hosting.
+- Improve the search algorithm to fetch more relevant github repositories, this is one aspect that I am currently struggling with. Suggestions are fine.
+- Improve UI layout. The current UI design is inspired by Github
 
 ## Local setup
 
