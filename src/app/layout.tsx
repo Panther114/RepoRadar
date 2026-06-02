@@ -3,6 +3,7 @@ import localFont from "next/font/local";
 import Link from "next/link";
 import Image from "next/image";
 import { Code2 } from "lucide-react";
+import pkg from "../../package.json";
 import "./globals.css";
 
 // Roca is used ONLY for the home-page slogan (see page.tsx). Exposed as a CSS
@@ -47,17 +48,19 @@ export default function RootLayout({
         <header className="sticky top-0 z-30 border-b border-border bg-[#010409]/95 backdrop-blur">
           <div className="mx-auto flex h-12 w-full max-w-7xl items-center justify-between px-4">
             <Link href="/" className="group inline-flex items-center gap-2 text-foreground">
-              <span className="relative inline-flex h-6 w-6 items-center justify-center overflow-hidden rounded-md border border-border bg-card">
+              {/* 90% of h-12 (48px) = ~43px */}
+              <span className="relative inline-flex h-[43px] w-[43px] shrink-0 items-center justify-center overflow-hidden rounded-md">
                 <Image
                   src="/icon.png"
                   alt="RepoRadar logo"
-                  width={24}
-                  height={24}
+                  width={43}
+                  height={43}
                   className="h-full w-full object-cover transition-transform duration-300 group-hover:scale-110"
                   priority
                 />
               </span>
               <span className="text-sm font-semibold">RepoRadar</span>
+              <span className="font-mono text-[10px] text-muted-foreground">v{pkg.version}</span>
             </Link>
             <nav className="flex items-center gap-1 text-xs text-muted-foreground">
               <Link href="/" className="rounded-md px-2 py-1.5 transition-colors hover:bg-card hover:text-foreground">
