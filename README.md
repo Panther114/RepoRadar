@@ -48,6 +48,8 @@ It is built for two audiences:
 
 ## How it works
 
+![RepoRadar core workflow diagram](./public/readme-workflow.png)
+
 | Stage | What happens | Output |
 |---|---|---|
 | 1 | You describe the repository you need in plain English. | Search intent |
@@ -169,6 +171,12 @@ If you want the default progress estimate to match the current UI, keep `SEARCH_
 - [Setup guide](./setup.txt)
 - [Project status](./PROGRESS.md)
 - [Architecture and product spec](./REPORADAR.md)
+
+README visual assets are generated with Python and Pillow:
+
+```bash
+python scripts/generate_readme_workflow.py
+```
 
 ## Contributing
 
