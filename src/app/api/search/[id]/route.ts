@@ -31,7 +31,7 @@ export async function GET(
   // server's job-creation timestamp so the elapsed clock is independent of when
   // the user opened the page; `etaSeconds` is the calibrated typical cold-search
   // duration. The stage label still drives the textual step indicator.
-  const etaSeconds = Number(process.env.SEARCH_ETA_SECONDS) || 40;
+  const etaSeconds = Number(process.env.SEARCH_ETA_SECONDS) || 67;
 
   return NextResponse.json({
     searchId: id,

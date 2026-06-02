@@ -209,7 +209,7 @@ export function SearchForm() {
       </div>
 
       <p className="mt-2 text-[11px] text-muted-foreground">
-        Fresh searches usually take about 40 seconds.
+        Fresh searches usually take about 60–70 seconds.
       </p>
 
       {error && (

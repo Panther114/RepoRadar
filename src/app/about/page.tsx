@@ -228,7 +228,7 @@ export default function AboutPage() {
           ))}
         </div>
         <p className="mt-4 text-xs text-muted-foreground">
-          Cold searches typically complete in 30–40 seconds. Warm searches (where candidates and
+          Cold searches typically complete in 60–70 seconds. Warm searches (where candidates and
           enrichment data are cached) are significantly faster.
         </p>
       </section>
