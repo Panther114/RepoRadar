@@ -178,34 +178,30 @@ export function ResultsView({ searchId }: { searchId: string }) {
 
       {rails.length > 0 && (
         <div className="mb-4 grid gap-2 sm:grid-cols-2 lg:grid-cols-5">
-          {rails.map((x) => {
-            const [o, n] = ownerNameFromFullName(x.r!.repo.fullName);
-            return (
-              <Link
-                key={x.label}
-                href={`/repo/${o}/${n}`}
-                className={cn(
-                  "card-hover group animate-in rounded-md border bg-card p-2.5",
-                  x.tone === "accent" ? "border-[#2ea043]/40" : "border-border",
-                )}
-              >
-                <div
-                  className={cn(
-                    "text-[10px] font-medium",
-                    x.tone === "accent" ? "text-accent" : "text-primary",
-                  )}
-                >
-                  {x.label}
-                </div>
-                <div className="mt-1 truncate text-sm font-medium group-hover:text-primary" title={x.r!.repo.fullName}>
-                  {x.r!.repo.fullName.split("/")[1] ?? x.r!.repo.fullName}
-                </div>
-                <div className="mt-0.5 truncate text-[11px] text-muted-foreground">
-                  {x.r!.repo.fullName.split("/")[0]}
-                </div>
-              </Link>
-            );
-          })}
+          {rails.map((x) => (
+            <button
+              key={x.label}
+              type="button"
+              onClick={() => {
+                const id = `repo-${x.r!.repo.fullName.replace("/", "--")}`;
+                document.getElementById(id)?.scrollIntoView({ behavior: "smooth", block: "start" });
+              }}
+              className={cn(
+                "card-hover group animate-in rounded-md border bg-card p-2.5 text-left",
+                x.tone === "accent" ? "border-[#2ea043]/40" : "border-border",
+              )}
+            >
+              <div className={cn("text-[10px] font-medium", x.tone === "accent" ? "text-accent" : "text-primary")}>
+                {x.label}
+              </div>
+              <div className="mt-1 truncate text-sm font-medium group-hover:text-primary" title={x.r!.repo.fullName}>
+                {x.r!.repo.fullName.split("/")[1] ?? x.r!.repo.fullName}
+              </div>
+              <div className="mt-0.5 truncate text-[11px] text-muted-foreground">
+                {x.r!.repo.fullName.split("/")[0]}
+              </div>
+            </button>
+          ))}
         </div>
       )}
 
@@ -227,13 +223,12 @@ export function ResultsView({ searchId }: { searchId: string }) {
           </div>
           <div className="space-y-2">
             {underrated.map((r, i) => (
-              <div key={`u-${r.repo.fullName}`} style={{ animationDelay: `${i * 60}ms` }}>
-                <RepoCard
-                  result={r}
-                  selected={selected.includes(r.repo.fullName)}
-                  onToggleSelect={toggleSelect}
-                  maxStars={maxStars}
-                />
+              <div
+                key={`u-${r.repo.fullName}`}
+                id={`repo-${r.repo.fullName.replace("/", "--")}`}
+                style={{ animationDelay: `${i * 60}ms` }}
+              >
+                <RepoCard result={r} selected={selected.includes(r.repo.fullName)} onToggleSelect={toggleSelect} maxStars={maxStars} />
               </div>
             ))}
           </div>
@@ -253,13 +248,12 @@ export function ResultsView({ searchId }: { searchId: string }) {
           </div>
           <div className="space-y-2">
             {results.map((r, i) => (
-              <div key={r.repo.fullName} style={{ animationDelay: `${i * 40}ms` }}>
-                <RepoCard
-                  result={r}
-                  selected={selected.includes(r.repo.fullName)}
-                  onToggleSelect={toggleSelect}
-                  maxStars={maxStars}
-                />
+              <div
+                key={r.repo.fullName}
+                id={`repo-${r.repo.fullName.replace("/", "--")}`}
+                style={{ animationDelay: `${i * 40}ms` }}
+              >
+                <RepoCard result={r} selected={selected.includes(r.repo.fullName)} onToggleSelect={toggleSelect} maxStars={maxStars} />
               </div>
             ))}
           </div>

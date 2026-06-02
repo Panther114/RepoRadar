@@ -69,7 +69,7 @@ export default function RootLayout({
               <Link href="/about" className="rounded-md px-2 py-1.5 transition-colors hover:bg-card hover:text-foreground">
                 About
               </Link>
-              <Link href="/api/health" className="rounded-md px-2 py-1.5 transition-colors hover:bg-card hover:text-foreground">
+              <Link href="/status" className="rounded-md px-2 py-1.5 transition-colors hover:bg-card hover:text-foreground">
                 Status
               </Link>
               <a

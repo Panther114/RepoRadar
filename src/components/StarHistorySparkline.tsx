@@ -17,10 +17,12 @@ export function StarHistorySparkline({
   owner,
   name,
   stars,
+  compact = false,
 }: {
   owner: string;
   name: string;
   stars?: number | null;
+  compact?: boolean;
 }) {
   const ref = useRef<HTMLDivElement>(null);
   const [inView, setInView] = useState(false);
@@ -55,19 +57,25 @@ export function StarHistorySparkline({
   const hasCurve = values.length >= 2;
 
   // Reserve a fixed height so the card never shifts as data streams in (CLS).
+  const h = compact ? 22 : 34;
+  const sparkH = compact ? 18 : 26;
+
   return (
     <div
       ref={ref}
-      className="flex h-[34px] items-center gap-2 px-3"
+      className="flex items-center gap-2 px-3"
+      style={{ height: h }}
       title="Star history — sampled from the GitHub stargazer timeline"
     >
       <Star className="h-3 w-3 shrink-0 text-[#d29922]" />
-      <span className="text-[10px] uppercase tracking-wide text-muted-foreground/70">
-        stars over time
-      </span>
+      {!compact && (
+        <span className="text-[10px] uppercase tracking-wide text-muted-foreground/70">
+          stars over time
+        </span>
+      )}
       <div className="flex flex-1 items-center justify-center">
         {hasCurve ? (
-          <Sparkline values={values} width={150} height={26} color="#d29922" />
+          <Sparkline values={values} width={150} height={sparkH} color="#d29922" />
         ) : (
           <div
             className={`h-px w-full max-w-[150px] rounded bg-border ${
