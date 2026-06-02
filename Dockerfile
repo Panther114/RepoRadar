@@ -1,6 +1,7 @@
-# RepoRadar production image (Stage 4). Build on a normal filesystem (Railway/
-# Linux), NOT the exFAT dev drive. Railway can also build this via Nixpacks
-# without a Dockerfile — this is provided for portability.
+# RepoRadar production image
+# Railway builds this automatically when the repo is linked.
+# Set all secrets (DATABASE_URL, GITHUB_TOKEN, OPENROUTER_API_KEY, etc.)
+# in the Railway dashboard — never commit them to the repo.
 
 FROM node:20-slim AS base
 RUN apt-get update && apt-get install -y --no-install-recommends openssl ca-certificates \
@@ -8,24 +9,34 @@ RUN apt-get update && apt-get install -y --no-install-recommends openssl ca-cert
 RUN corepack enable
 WORKDIR /app
 
-# ---- dependencies ----
+# ── dependencies ──────────────────────────────────────────────────────────────
 FROM base AS deps
 COPY package.json pnpm-lock.yaml pnpm-workspace.yaml .npmrc* ./
 COPY prisma ./prisma
 RUN pnpm install --frozen-lockfile
 
-# ---- build ----
+# ── build ─────────────────────────────────────────────────────────────────────
 FROM base AS build
 COPY --from=deps /app/node_modules ./node_modules
 COPY . .
+ENV NEXT_TELEMETRY_DISABLED=1
+ENV NODE_ENV=production
+# prisma generate is needed at build time (types); DATABASE_URL is injected
+# by Railway at build. For local docker builds set it in the shell first.
 RUN pnpm exec prisma generate && pnpm exec next build --webpack
 
-# ---- runtime ----
+# ── runtime ───────────────────────────────────────────────────────────────────
 FROM base AS run
 ENV NODE_ENV=production
+ENV NEXT_TELEMETRY_DISABLED=1
+# Railway injects PORT automatically; default 3000 for local docker runs.
 ENV PORT=3000
+
+# Copy the full build output including node_modules so native addons
+# (onnxruntime-node, sharp) work without re-compilation.
 COPY --from=build /app ./
-EXPOSE 3000
-# Apply migrations, then start. Set env vars (DATABASE_URL, OPENROUTER_API_KEY,
-# GITHUB_TOKEN, NO_LLM_MODE, ...) in the Railway dashboard.
-CMD ["sh", "-c", "pnpm exec prisma migrate deploy && pnpm start"]
+
+EXPOSE ${PORT}
+
+# Apply any pending DB migrations then start Next.js on Railway's PORT.
+CMD ["sh", "-c", "pnpm exec prisma migrate deploy && pnpm exec next start -p ${PORT:-3000}"]

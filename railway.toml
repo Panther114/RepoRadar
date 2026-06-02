@@ -1,0 +1,16 @@
+# Railway deployment configuration for RepoRadar
+# https://docs.railway.app/reference/config-as-code
+
+[build]
+# Use the Dockerfile for building. Railway also supports Nixpacks auto-detection
+# but the Dockerfile gives explicit control over native module handling.
+builder = "DOCKERFILE"
+dockerfilePath = "Dockerfile"
+
+[deploy]
+# Ensure DATABASE_URL is set in Railway Variables before deploying.
+# Run migrations as part of the start command (see Dockerfile CMD).
+healthcheckPath = "/api/health"
+healthcheckTimeout = 60
+restartPolicyType = "ON_FAILURE"
+restartPolicyMaxRetries = 3
