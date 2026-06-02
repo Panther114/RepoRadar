@@ -14,7 +14,7 @@ WORKDIR /app
 
 # ── dependencies ──────────────────────────────────────────────────────────────
 FROM base AS deps
-COPY package.json pnpm-lock.yaml pnpm-workspace.yaml .npmrc* ./
+COPY package.json pnpm-lock.yaml .npmrc* ./
 COPY prisma ./prisma
 RUN pnpm install --frozen-lockfile
 
@@ -24,8 +24,9 @@ COPY --from=deps /app/node_modules ./node_modules
 COPY . .
 ENV NEXT_TELEMETRY_DISABLED=1
 ENV NODE_ENV=production
-# prisma generate is needed at build time (types); DATABASE_URL is injected
-# by Railway at build. For local docker builds set it in the shell first.
+# prisma generate reads the schema and generates TS types — it does NOT
+# require DATABASE_URL (no DB connection at build time). DATABASE_URL is only
+# needed at runtime for `prisma migrate deploy` in the CMD below.
 RUN pnpm exec prisma generate && pnpm exec next build --webpack
 
 # ── runtime ───────────────────────────────────────────────────────────────────
@@ -39,7 +40,8 @@ ENV PORT=3000
 # (onnxruntime-node, sharp) work without re-compilation.
 COPY --from=build /app ./
 
-EXPOSE ${PORT}
+# Railway uses the PORT env var for routing — EXPOSE is documentation only.
+EXPOSE 3000
 
 # Apply any pending DB migrations then start Next.js on Railway's PORT.
 CMD ["sh", "-c", "pnpm exec prisma migrate deploy && pnpm exec next start -p ${PORT:-3000}"]

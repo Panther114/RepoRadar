@@ -1,9 +1,0 @@
-# E: drive is exFAT (no symlink support) -> flat, hoisted node_modules.
-nodeLinker: hoisted
-allowBuilds:
-  '@prisma/client': true
-  '@prisma/engines': true
-  prisma: true
-  protobufjs: true
-  sharp: false
-  unrs-resolver: false
