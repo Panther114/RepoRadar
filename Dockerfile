@@ -3,10 +3,13 @@
 # Set all secrets (DATABASE_URL, GITHUB_TOKEN, OPENROUTER_API_KEY, etc.)
 # in the Railway dashboard — never commit them to the repo.
 
-FROM node:20-slim AS base
+# Node 22 LTS is required for pnpm 9+ (Corepack resolves the version pinned in
+# package.json "packageManager": "pnpm@9.15.4"). All app dependencies support
+# Node 22; local development on Node 20 also works with the pinned pnpm 9.
+FROM node:22-slim AS base
 RUN apt-get update && apt-get install -y --no-install-recommends openssl ca-certificates \
   && rm -rf /var/lib/apt/lists/*
-RUN corepack enable
+RUN corepack enable && corepack prepare pnpm@9.15.4 --activate
 WORKDIR /app
 
 # ── dependencies ──────────────────────────────────────────────────────────────
