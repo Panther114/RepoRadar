@@ -136,6 +136,19 @@ sequenceDiagram
 - `NO_LLM_MODE=true` runs the full pipeline without paid model calls.
 - The optional LLM layer uses an OpenAI-compatible endpoint, so you can choose the provider.
 
+## Search quality diagnostics
+
+RepoRadar includes a short manual diagnostic benchmark for search quality:
+
+```bash
+node scripts/search-benchmark.mjs --limit 6
+```
+
+It uses short general-user prompts such as `browser testing`, `notion editor`, and `simple react
+state`. It does not compute a deterministic score or CI grade. It reports top repos,
+expected-known repo presence, latency, and points to `logs/search-diagnostics.jsonl` for generated
+queries and candidate-pool evidence.
+
 ## Quick start
 
 ```bash
@@ -162,6 +175,10 @@ Important environment variables:
 - `OPENROUTER_API_KEY`
 - `NO_LLM_MODE`
 - `FUNNEL_TOP_N`
+- `MAX_SEARCH_QUERIES`
+- `LIGHT_ENRICH_TOP_N`
+- `INTENT_TIMEOUT_MS`
+- `LISTWISE_TIMEOUT_MS`
 - `SEARCH_ETA_SECONDS`
 
 If you want the default progress estimate to match the current UI, keep `SEARCH_ETA_SECONDS=40`.

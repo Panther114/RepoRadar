@@ -3,10 +3,12 @@ import { prisma } from "@/lib/db";
 import { env, isLlmEnabled } from "@/lib/env";
 import { LLM_MODEL } from "@/lib/llm/client";
 import { extractIntent, heuristicIntent } from "@/lib/llm/intent";
-import { searchCandidates } from "@/lib/github/search";
+import { searchCandidatesDetailed } from "@/lib/github/search";
 import { narrowCandidates } from "@/lib/funnel/narrow";
 import { enrichReposBatch } from "@/lib/github/enrich";
+import { fetchLightRepoEvidenceBatch } from "@/lib/github/lightEnrich";
 import { scoreRepo } from "@/lib/llm/score";
+import { applyListwiseRanking, rankReposListwise } from "@/lib/llm/listwise";
 import { deterministicScore } from "@/lib/scoring/deterministic";
 import { embedBatch } from "@/lib/embeddings/embedder";
 import { upsertRepoEmbedding, setIntentEmbedding } from "@/lib/embeddings/store";
@@ -22,7 +24,9 @@ import {
 } from "@/lib/pipeline/persist";
 import { analysisInputHash, hashJson, sha256 } from "@/lib/cache/keys";
 import { createLogger } from "@/lib/logger";
-import type { Analysis, Intent, RepoEvidence, SearchFilters } from "@/lib/types";
+import { findGuidanceHints } from "@/lib/search/guidance";
+import { writeSearchDiagnostics } from "@/lib/pipeline/diagnostics";
+import type { Analysis, Candidate, Intent, RepoEvidence, SearchDiagnostics, SearchFilters } from "@/lib/types";
 
 const log = createLogger("pipeline");
 
@@ -100,6 +104,50 @@ async function scoreWithCache(
   return analysis;
 }
 
+function adaptiveMaxQueries(prompt: string, candidatesKnownLow = false): number {
+  const configured = Number(process.env.MAX_SEARCH_QUERIES) || 6;
+  const shortPrompt = prompt.trim().split(/\s+/).filter(Boolean).length <= 4;
+  return Math.min(8, Math.max(configured, shortPrompt || candidatesKnownLow ? 6 : 4));
+}
+
+function makeDiagnostics(args: {
+  searchQueryId: string;
+  prompt: string;
+  intent: Intent;
+  heuristic: Intent;
+  activeQueries: string[];
+  perQueryResults: { query: string; total: number; repos: string[] }[];
+  dedupeCount: number;
+  candidates: Candidate[];
+  survivors?: string[];
+}): SearchDiagnostics {
+  const canonicalNames = args.intent.canonicalNames ?? [];
+  const candidateNames = new Set(args.candidates.map((c) => c.fullName.toLowerCase()));
+  const survivorNames = new Set((args.survivors ?? []).map((name) => name.toLowerCase()));
+  const droppedKnownCandidates = canonicalNames.filter((name) => {
+    const n = name.toLowerCase();
+    return candidateNames.has(n) && !survivorNames.has(n);
+  });
+  const now = new Date().toISOString();
+  return {
+    searchQueryId: args.searchQueryId,
+    prompt: args.prompt,
+    llmQueries: args.intent.queries,
+    heuristicQueries: args.heuristic.queries,
+    guidanceHints: findGuidanceHints(args.prompt),
+    canonicalNames,
+    activeQueries: args.activeQueries,
+    perQueryResults: args.perQueryResults,
+    dedupeCount: args.dedupeCount,
+    candidatePoolCount: args.candidates.length,
+    candidatePool: args.candidates.map((c) => c.fullName),
+    funnelSurvivors: args.survivors ?? [],
+    droppedKnownCandidates,
+    startedAt: now,
+    updatedAt: now,
+  };
+}
+
 /**
  * The full search pipeline. Runs in the background after POST /api/search.
  * Updates the SearchJob as it progresses; writes SearchResult rows at the end.
@@ -137,14 +185,20 @@ export async function runSearch(
         return heuristic;
       }),
       (async () => {
-        const h = hashJson({ q: [...heuristic.queries].sort(), max: env.MAX_CANDIDATES });
+        const h = hashJson({
+          q: [...heuristic.queries].sort(),
+          canonical: [...(heuristic.canonicalNames ?? [])].sort(),
+          max: env.MAX_CANDIDATES,
+        });
         const cached = await loadCandidateCache(h, searchTtlMs).catch(() => null);
         if (cached && cached.length > 0) return { candidates: cached, fromCache: true };
-        const results = await searchCandidates(heuristic.queries, heuristic.constraints, {
+        const results = await searchCandidatesDetailed(heuristic.queries, heuristic.constraints, {
           maxPool: env.MAX_CANDIDATES,
+          maxQueries: adaptiveMaxQueries(prompt),
+          canonicalNames: heuristic.canonicalNames ?? [],
         });
-        saveCandidateCache(h, results).catch(() => {});
-        return { candidates: results, fromCache: false };
+        saveCandidateCache(h, results.candidates).catch(() => {});
+        return { candidates: results.candidates, fromCache: false };
       })(),
     ]);
 
@@ -171,9 +225,20 @@ export async function runSearch(
     // LLM-first strategy: the LLM intent always wins when it differs from the
     // heuristic. The heuristic search that ran in parallel is kept as a fallback
     // (zero-cost since it already ran) but we prefer the LLM's richer queries.
-    let candidates: Awaited<ReturnType<typeof searchCandidates>>;
-    const llmHash = hashJson({ q: [...intent.queries].sort(), max: env.MAX_CANDIDATES });
-    const llmQueriesDiffer = llmHash !== hashJson({ q: [...heuristic.queries].sort(), max: env.MAX_CANDIDATES });
+    let candidates: Candidate[];
+    let activeQueries: string[] = [];
+    let perQueryResults: { query: string; total: number; repos: string[] }[] = [];
+    let dedupeCount = 0;
+    const llmHash = hashJson({
+      q: [...intent.queries].sort(),
+      canonical: [...(intent.canonicalNames ?? [])].sort(),
+      max: env.MAX_CANDIDATES,
+    });
+    const llmQueriesDiffer = llmHash !== hashJson({
+      q: [...heuristic.queries].sort(),
+      canonical: [...(heuristic.canonicalNames ?? [])].sort(),
+      max: env.MAX_CANDIDATES,
+    });
 
     if (llmQueriesDiffer) {
       // Check if we already have cached results for the LLM queries.
@@ -184,9 +249,15 @@ export async function runSearch(
       } else {
         // Run the LLM queries — they're richer, topic-aware, and expanded.
         // Do NOT prefer the heuristic results: we want what the LLM asked for.
-        candidates = await searchCandidates(intent.queries, intent.constraints, {
+        const details = await searchCandidatesDetailed(intent.queries, intent.constraints, {
           maxPool: env.MAX_CANDIDATES,
+          maxQueries: adaptiveMaxQueries(prompt),
+          canonicalNames: intent.canonicalNames ?? [],
         });
+        candidates = details.candidates;
+        activeQueries = details.activeQueries;
+        perQueryResults = details.perQueryResults;
+        dedupeCount = details.dedupeCount;
         saveCandidateCache(llmHash, candidates).catch(() => {});
         searchLog.info("Candidates found (LLM fresh search)", { count: candidates.length });
 
@@ -202,12 +273,24 @@ export async function runSearch(
       // LLM produced the same queries as heuristic (or LLM was disabled/failed).
       // Use the already-available heuristic results — no extra round-trip needed.
       candidates = heuristicCandidates.candidates;
+      activeQueries = heuristic.queries.slice(0, adaptiveMaxQueries(prompt));
       searchLog.info("Candidates found (heuristic / same queries)", {
         count: candidates.length,
         fromCache: heuristicCandidates.fromCache,
       });
     }
     doneSearch();
+
+    writeSearchDiagnostics(makeDiagnostics({
+      searchQueryId,
+      prompt,
+      intent,
+      heuristic,
+      activeQueries,
+      perQueryResults,
+      dedupeCount,
+      candidates,
+    }));
 
     if (candidates.length === 0) {
       searchLog.warn("No candidates found — completing with empty results");
@@ -217,13 +300,26 @@ export async function runSearch(
 
     // ── Stage 3: Funnel / narrowing ───────────────────────────────────────────
     await setJob(searchQueryId, { stage: "funnel", progress: 35 });
+    const lightEvidence = await fetchLightRepoEvidenceBatch(
+      candidates,
+      Number(process.env.LIGHT_ENRICH_TOP_N) || 20,
+    ).catch((err) => {
+      searchLog.warn("Light enrichment failed; funnel will use metadata only", err);
+      return undefined;
+    });
     const doneFunnel = searchLog.time("funnel narrowing", {
       candidates: candidates.length,
       topN: env.FUNNEL_TOP_N,
     });
     let funnelResult: Awaited<ReturnType<typeof narrowCandidates>>;
     try {
-      funnelResult = await narrowCandidates(candidates, intent, env.FUNNEL_TOP_N);
+      funnelResult = await narrowCandidates(
+        candidates,
+        intent,
+        env.FUNNEL_TOP_N,
+        lightEvidence,
+        intent.canonicalNames ?? [],
+      );
       doneFunnel();
       searchLog.info("Funnel complete", { survivors: funnelResult.entries.length });
     } catch (err) {
@@ -232,6 +328,17 @@ export async function runSearch(
     }
 
     const { intentEmbedding, entries } = funnelResult;
+    writeSearchDiagnostics(makeDiagnostics({
+      searchQueryId,
+      prompt,
+      intent,
+      heuristic,
+      activeQueries,
+      perQueryResults,
+      dedupeCount,
+      candidates,
+      survivors: entries.map((entry) => entry.candidate.fullName),
+    }));
     try {
       await setIntentEmbedding(searchQueryId, intentEmbedding);
     } catch (err) {
@@ -309,22 +416,18 @@ export async function runSearch(
       )
       .catch((err) => searchLog.warn("Evidence embedding batch failed (non-fatal)", err));
 
-    // ── Stage 5: Score (concurrent pool) ─────────────────────────────────────
-    // Evidence is ready for everyone; now run scoring concurrently. `entries` is
-    // funnel-ranked, so the first LLM_SCORE_TOP_N get the LLM and the tail keeps
-    // its instant deterministic score. Default LLM_SCORE_TOP_N=20 ⇒ all scored.
+    // ── Stage 5: Score / listwise rank ───────────────────────────────────────
+    // Evidence is ready for everyone. Compute deterministic baselines for health
+    // and fallback, then prefer one cheap listwise model call for relative fit.
     await setJob(searchQueryId, { stage: "score", progress: 65 });
-    const llmTopN = isLlmEnabled() ? Math.min(env.LLM_SCORE_TOP_N, entries.length) : 0;
     searchLog.info("Score plan", {
       survivors: entries.length,
-      llmScored: llmTopN,
-      deterministicOnly: entries.length - llmTopN,
-      concurrency: env.ANALYZE_CONCURRENCY,
+      listwise: isLlmEnabled(),
       model: isLlmEnabled() ? LLM_MODEL : "deterministic",
     });
 
     const scored: { analysis: Analysis; evidence: RepoEvidence; repoId: string }[] = [];
-    let completedCount = 0;
+    const baselines: Analysis[] = [];
 
     await runPool(
       entries.map((entry, index) => ({ entry, evidence: evidences[index], repoId: repoIds[index], index })),
@@ -334,38 +437,68 @@ export async function runSearch(
         try {
           await saveSnapshot(repoId, entry.candidate);
           await saveReadme(repoId, evidence);
-
-          // Deterministic baseline — instant, and the fallback if the LLM call is
-          // skipped (tail) or throws.
-          let analysis = deterministicScore(intent, evidence);
-          if (index < llmTopN) {
-            const doneScore = repoLog.time("scoring");
-            try {
-              analysis = await scoreWithCache(intent, evidence, repoId, searchQueryId, intentHash);
-            } catch (err) {
-              repoLog.error(`LLM scoring failed for ${entry.candidate.fullName} (keeping deterministic)`, err);
-            }
-            doneScore();
-          }
-
-          repoLog.info("Scored", {
-            fit: analysis.fit.toFixed(2),
-            future: analysis.future.toFixed(2),
-            underrated: analysis.underrated.toFixed(2),
-            total: analysis.total.toFixed(2),
-            source: analysis.source,
-          });
-          scored.push({ analysis, evidence, repoId });
+          baselines[index] = deterministicScore(intent, evidence);
         } catch (err) {
-          repoLog.error(`Failed to score ${entry.candidate.fullName} (skipping)`, err);
+          repoLog.error(`Failed to save baseline evidence for ${entry.candidate.fullName} (skipping)`, err);
         }
-        completedCount++;
-        await setJob(searchQueryId, {
-          stage: `score ${completedCount}/${entries.length}`,
-          progress: 65 + Math.round((30 * completedCount) / entries.length),
-        });
       },
     );
+
+    let listwiseApplied = false;
+    if (isLlmEnabled() && baselines.length === evidences.length) {
+      const doneListwise = searchLog.time("listwise rerank", { repos: evidences.length });
+      try {
+        const listwise = await rankReposListwise(intent, evidences, baselines);
+        doneListwise();
+        if (listwise) {
+          const repoIdByName = new Map(evidences.map((e, i) => [e.candidate.fullName.toLowerCase(), repoIds[i]]));
+          for (const ranked of applyListwiseRanking({ evidences, baselines, listwise })) {
+            scored.push({
+              analysis: ranked.analysis,
+              evidence: ranked.evidence,
+              repoId: repoIdByName.get(ranked.evidence.candidate.fullName.toLowerCase())!,
+            });
+          }
+          listwiseApplied = true;
+          searchLog.info("Listwise rerank applied", { scoredCount: scored.length });
+        }
+      } catch (err) {
+        doneListwise();
+        searchLog.warn("Listwise rerank failed; falling back to pointwise scoring", err);
+      }
+    }
+
+    if (!listwiseApplied) {
+      let completedCount = 0;
+      const llmTopN = isLlmEnabled() ? Math.min(env.LLM_SCORE_TOP_N, entries.length) : 0;
+      await runPool(
+        entries.map((entry, index) => ({ entry, evidence: evidences[index], repoId: repoIds[index], index })),
+        env.ANALYZE_CONCURRENCY,
+        async ({ entry, evidence, repoId, index }) => {
+          const repoLog = createLogger(`pipeline:${entry.candidate.fullName}`);
+          try {
+            let analysis = baselines[index] ?? deterministicScore(intent, evidence);
+            if (index < llmTopN) {
+              const doneScore = repoLog.time("pointwise scoring fallback");
+              try {
+                analysis = await scoreWithCache(intent, evidence, repoId, searchQueryId, intentHash);
+              } catch (err) {
+                repoLog.error(`LLM scoring failed for ${entry.candidate.fullName} (keeping deterministic)`, err);
+              }
+              doneScore();
+            }
+            scored.push({ analysis, evidence, repoId });
+          } catch (err) {
+            repoLog.error(`Failed to score ${entry.candidate.fullName} (skipping)`, err);
+          }
+          completedCount++;
+          await setJob(searchQueryId, {
+            stage: `score ${completedCount}/${entries.length}`,
+            progress: 65 + Math.round((30 * completedCount) / entries.length),
+          });
+        },
+      );
+    }
 
     searchLog.info("Analysis complete", { scoredCount: scored.length });
 
@@ -404,7 +537,7 @@ export async function runSearch(
       const pop = popularityPrior(s.evidence.candidate.stars);
       return relevance * (1 + POP_WEIGHT * pop);
     };
-    scored.sort((a, b) => rankScore(b) - rankScore(a));
+    if (!listwiseApplied) scored.sort((a, b) => rankScore(b) - rankScore(a));
 
     const minFuture = filters?.minFutureScore ?? null;
     let rank = 1;

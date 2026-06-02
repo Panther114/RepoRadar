@@ -12,6 +12,7 @@
     "build": "prisma generate && next build --webpack",
     "start": "next start --port 2000",
     "typecheck": "tsc --noEmit",
+    "test": "tsx --test tests/search-quality.test.ts",
     "db:migrate": "prisma migrate dev",
     "db:deploy": "prisma migrate deploy",
     "db:push": "prisma db push",
@@ -41,6 +42,7 @@
     "@types/react-dom": "^19",
     "prisma": "^6.19.3",
     "tailwindcss": "^4",
+    "tsx": "^4.21.0",
     "typescript": "^5"
   },
   "pnpm": {

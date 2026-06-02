@@ -1,6 +1,6 @@
 # RepoRadar — Progress
 
-_Last updated: 2026-06-01_
+_Last updated: 2026-06-02_
 
 ## Summary
 
@@ -11,7 +11,7 @@ codebase passes `tsc --noEmit` (strict).
 ## What works (verified)
 
 - `pnpm dev` boots in ~0.8s; **home page returns 200** and renders the RepoRadar UI.
-- **`/api/health` runs** (returns JSON; reports `db:false` only because Postgres isn't running locally).
+- **`/api/health` runs** (returns JSON; reports `db:true`, `pgvector:true` in the current local DB).
 - **`/results/[id]` and `/repo/[owner]/[name]` compile and return 200.**
 - Full **TypeScript typecheck passes** (`pnpm typecheck`).
 - Prisma client generates; the initial migration SQL (tables + `vector` extension + ivfflat index)
@@ -146,13 +146,25 @@ This drive (`E:`) is **exFAT**, which has no symlink support. To work around tha
   soon as the queued `searchId` is returned. `GET /api/search` is a lightweight readiness endpoint for
   warming and diagnostics.
 - **Search ETA**: the default estimate is now 40 seconds, and the UI explicitly says fresh searches
-  usually take about 40 seconds.
+  usually take roughly 30-60 seconds depending on cache state and provider latency.
 - **Results-route stability**: the React Query provider is now scoped to the results route instead of
   the root app shell, which removes the `app/layout.js` chunk from the critical navigation path and
   avoids the dev-only `ChunkLoadError` / stale shell crash.
 - **Next dev stability**: exFAT-specific webpack workarounds are now opt-in with
   `REPORADAR_EXFAT_MODE=true`. This checkout is on NTFS, so the normal Next dev cache/manifests are
   used by default to avoid stale/empty manifest failures during local testing.
+- **Search quality upgrade**: query expansion now treats ecosystem language mentions as soft by
+  default, adds guidance-only recall hints, uses RRF-style candidate fusion, writes candidate-pool
+  diagnostics to `logs/search-diagnostics.jsonl`, fetches cheap README-head evidence before the
+  funnel, applies canonical-name rescue without final-rank shortcuts, and prefers one bounded
+  listwise LLM rerank over multiple pointwise scoring calls.
+- **Diagnostic benchmark**: `node scripts/search-benchmark.mjs --limit 6` runs up to 10 short
+  general-user prompts through the real search path. It is a manual diagnostic only, not a
+  deterministic product score or CI gate.
+- **Migration recovery note**: if the local database already has `repo_enrichments` or
+  `search_candidate_caches` from `prisma db push` and Prisma still marks
+  `20260602000000_add_enrichment_cache` failed, verify the tables exist, then run
+  `pnpm exec prisma migrate resolve --applied 20260602000000_add_enrichment_cache`.
 - **Real AI scoring**: needs `OPENROUTER_API_KEY` + `NO_LLM_MODE=false`.
 - **Production build / Railway deploy**: run on Linux per the note above.
 

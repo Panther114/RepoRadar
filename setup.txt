@@ -43,7 +43,11 @@ Then open `.env` and set these. The most important one is the LLM API key:
     DATABASE_URL=postgresql://reporadar:reporadar@localhost:5432/reporadar?schema=public
 
     # ---- Tuning ----
-    FUNNEL_TOP_N=15                 <-- how many repos the AI scores per search (<=20)
+    FUNNEL_TOP_N=15                 <-- how many repos survive to deep evidence + reranking (<=20)
+    MAX_SEARCH_QUERIES=6            <-- 6-8 is recommended for open recall with a GitHub token
+    LIGHT_ENRICH_TOP_N=20           <-- cheap README-head enrichment before the funnel
+    INTENT_TIMEOUT_MS=6000          <-- slow intent calls fall back to heuristic/guidance
+    LISTWISE_TIMEOUT_MS=10000       <-- slow listwise calls fall back instead of blocking search
 
     # ---- Filesystem compatibility ----
     REPORADAR_EXFAT_MODE=false      <-- leave false on NTFS/Linux/macOS. Set true only
@@ -91,6 +95,14 @@ Expected when DB is up:         {"status":"ok","db":true,"pgvector":true}
   with a score breakdown, "Best of" rails, an Underrated section, and compare.
 - Click a repo to see its detail page with radar charts and README evidence.
 
+Manual search-quality diagnostics:
+
+    node scripts/search-benchmark.mjs --limit 6
+
+This benchmark is intentionally short and manual. It runs the real search path, reports top repos
+and expected-known repo presence, and does not compute a deterministic product score. Inspect
+`logs/search-diagnostics.jsonl` for generated queries and candidate-pool details.
+
 ------------------------------------------------------------------------------
 TROUBLESHOOTING
 ------------------------------------------------------------------------------
@@ -116,6 +128,11 @@ TROUBLESHOOTING
 - pnpm install symlink errors -> if the repo is on exFAT, keep `nodeLinker:
   hoisted` in pnpm-workspace.yaml and set REPORADAR_EXFAT_MODE=true. On NTFS,
   Linux, macOS, or WSL, leave REPORADAR_EXFAT_MODE=false.
+- `pnpm db:deploy` says migration `20260602000000_add_enrichment_cache` failed
+  because `repo_enrichments` already exists -> the cache tables were likely
+  created by a prior `prisma db push`. After verifying the tables exist, repair
+  Prisma migration state with:
+      pnpm exec prisma migrate resolve --applied 20260602000000_add_enrichment_cache
 - `pnpm build` fails with EISDIR/readlink/junction errors -> that is usually an
   exFAT filesystem limitation, not a code bug. Set REPORADAR_EXFAT_MODE=true
   for exFAT development, or run production builds on Linux/Railway, NTFS, or WSL.
@@ -124,6 +141,7 @@ TROUBLESHOOTING
 COMMANDS REFERENCE
 ------------------------------------------------------------------------------
     pnpm dev           start dev server (http://localhost:2000)
+    pnpm test          run focused search-quality unit tests
     pnpm build         production build (run on Linux/NTFS, not exFAT)
     pnpm start         run the production build
     pnpm typecheck     TypeScript check

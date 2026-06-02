@@ -39,6 +39,7 @@ devlog.txt
 dev-*.txt
 prod-*.txt
 /logs/*.log
+/logs/*.jsonl
 
 # vercel
 .vercel

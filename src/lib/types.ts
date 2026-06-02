@@ -15,6 +15,13 @@ export type ProjectType =
   | "dataset"
   | "any";
 
+export type RepoTypeLabel =
+  | ProjectType
+  | "docs/profile"
+  | "generated-sdk"
+  | "mirror/fork-like"
+  | "unknown";
+
 /** Structured constraints extracted from the user's natural-language prompt. */
 export interface Constraints {
   keywords: string[];
@@ -52,6 +59,8 @@ export interface Intent {
   constraints: Constraints;
   /** GitHub-compatible search query strings (multiple variants). */
   queries: string[];
+  /** Guidance-only names/owners suggested by intent extraction; never used as a ranking shortcut. */
+  canonicalNames?: string[];
 }
 
 /** A repository candidate as returned by GitHub search. */
@@ -112,6 +121,66 @@ export interface RepoEvidence {
   };
   /** Cosine similarity of intent vs repo evidence (0..1), from the funnel. */
   similarity: number;
+}
+
+export interface CandidateSource {
+  query: string;
+  candidates: Candidate[];
+}
+
+export interface LightRepoEvidence {
+  fullName: string;
+  readmeHead: string | null;
+  manifestNames: string[];
+  docsSignals: {
+    hasReadme: boolean;
+    hasInstall: boolean;
+    hasExamples: boolean;
+    hasDocsFolder: boolean;
+  };
+}
+
+export interface GuidanceHint {
+  id: string;
+  match: string;
+  terms: string[];
+  repoNames: string[];
+  queries: string[];
+}
+
+export interface RepoTypeClassification {
+  type: RepoTypeLabel;
+  confidence: number;
+  evidence?: string;
+}
+
+export interface ListwiseRankedResult {
+  fullName: string;
+  rank: number;
+  fit: number;
+  repoTypes: RepoTypeClassification[];
+  summary: string;
+  matchedFeatures: MatchedFeature[];
+  missingFeatures: MissingFeature[];
+  risks: Risk[];
+}
+
+export interface SearchDiagnostics {
+  searchQueryId: string;
+  prompt: string;
+  llmQueries: string[];
+  heuristicQueries: string[];
+  guidanceHints: GuidanceHint[];
+  canonicalNames: string[];
+  activeQueries: string[];
+  perQueryResults: { query: string; total: number; repos: string[] }[];
+  dedupeCount: number;
+  candidatePoolCount: number;
+  candidatePool: string[];
+  funnelSurvivors: string[];
+  droppedKnownCandidates: string[];
+  startedAt: string;
+  updatedAt: string;
 }
 
 export interface MatchedFeature {
