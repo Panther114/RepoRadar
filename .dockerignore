@@ -1,15 +1,33 @@
 node_modules
 .next
 .git
+.gitignore
+.github
 .env
 .env.*
 !.env.example
-devlog.txt
 *.tsbuildinfo
 npm-debug.log*
 .pnpm-debug.log*
+
+# logs & local dev artifacts
+devlog.txt
+dev-*.txt
+prod-*.txt
+logs
+
+# docs (not needed in the runtime image)
 README.md
 REPORADAR.md
 PLAN.md
 PROGRESS.md
+CONTRIBUTING.md
+AGENTS.md
 setup.txt
+
+# video production workspace (not part of the app)
+hyperframes
+
+# editor / OS noise
+.DS_Store
+.claude

@@ -43,6 +43,9 @@ prod-*.txt
 # vercel
 .vercel
 
+# hyperframes (video production workspace — not part of the app)
+/hyperframes
+
 # typescript
 *.tsbuildinfo
 next-env.d.ts
