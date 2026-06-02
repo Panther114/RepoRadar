@@ -26,7 +26,7 @@ const MODELS = [
 const SYSTEM = `You are RepoRadar's repository evaluator. Given a user's intent and EVIDENCE about ONE GitHub repository, you PRODUCE the scores. Ground every judgement in the provided evidence — never invent facts.
 
 Use these rubrics (weights are guidance for how to weigh sub-scores; you still output the final 0..1 scores):
-Fit = 0.40 semantic_similarity + 0.20 explicit_feature_match + 0.15 language_framework_match + 0.10 package_manifest_match + 0.10 constraint_satisfaction + 0.05 repository_type_match
+Fit = 0.55 semantic_similarity + 0.20 explicit_feature_match + 0.10 language_framework_match + 0.07 package_manifest_match + 0.05 constraint_satisfaction + 0.03 repository_type_match
 Future = 0.20 recent_activity + 0.15 release_cadence + 0.15 issue_pr_health + 0.15 contributor_health + 0.15 star_velocity + 0.10 documentation_quality + 0.10 ecosystem_signal (minus risk penalties)
 Underrated: high fit + high future + good docs + recent growth, MINUS popularity saturation (a great small repo scores high; a hugely popular but only-loosely-relevant repo scores low).
 

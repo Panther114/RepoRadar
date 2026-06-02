@@ -1,6 +1,6 @@
 import { embedBatch, cosineSimilarity } from "@/lib/embeddings/embedder";
 import { clamp01 } from "@/lib/scoring/rubric";
-import type { Candidate, Constraints, Intent } from "@/lib/types";
+import type { Candidate, Constraints, Intent, LightRepoEvidence } from "@/lib/types";
 
 export interface FunnelEntry {
   candidate: Candidate;
@@ -46,10 +46,17 @@ function starsScore(stars: number, includeSmall: boolean): number {
   return 0.4;
 }
 
-function candidateText(c: Candidate): string {
-  return [c.fullName, c.description ?? "", c.topics.join(" "), c.primaryLanguage ?? ""]
+function candidateText(c: Candidate, light?: LightRepoEvidence): string {
+  return [
+    c.fullName,
+    c.description ?? "",
+    c.topics.join(" "),
+    c.primaryLanguage ?? "",
+    light?.manifestNames.join(" ") ?? "",
+    light?.readmeHead ?? "",
+  ]
     .join(". ")
-    .slice(0, 2000);
+    .slice(0, 1200);
 }
 
 /** Geometric mean of values in (0,1]. Conjunctive: one low value drags it down. */
@@ -100,9 +107,11 @@ export async function narrowCandidates(
   candidates: Candidate[],
   intent: Intent,
   topN: number,
+  lightEvidence?: Map<number, LightRepoEvidence>,
+  rescuedNames: string[] = [],
 ): Promise<FunnelResult> {
   const c = intent.constraints;
-  const candTexts = candidates.map(candidateText);
+  const candTexts = candidates.map((candidate) => candidateText(candidate, lightEvidence?.get(candidate.githubId)));
 
   // Aspect-decomposed ranking: when the LLM produced ≥2 orthogonal aspects we
   // embed each one separately and combine conjunctively, so a repo must satisfy
@@ -152,6 +161,33 @@ export async function narrowCandidates(
 
   entries.sort((a, b) => b.prefilterScore - a.prefilterScore);
 
-  return { intentEmbedding, entries: entries.slice(0, topN) };
-}
+  const selected = entries.slice(0, topN);
+  const selectedNames = new Set(selected.map((entry) => entry.candidate.fullName.toLowerCase()));
+  const rescued = new Set(
+    rescuedNames
+      .map((name) => name.trim().replace(/^https:\/\/github\.com\//i, "").toLowerCase())
+      .filter((name) => name.includes("/")),
+  );
 
+  const maxRescues = Math.min(3, topN);
+  let rescueCount = selected.filter((entry) => rescued.has(entry.candidate.fullName.toLowerCase())).length;
+  for (const entry of entries) {
+    if (rescueCount >= maxRescues) break;
+    const fullName = entry.candidate.fullName.toLowerCase();
+    if (!rescued.has(fullName) || selectedNames.has(fullName)) continue;
+    if (selected.length < topN) {
+      selected.push(entry);
+    } else {
+      let replaceAt = selected.length - 1;
+      while (replaceAt >= 0 && rescued.has(selected[replaceAt].candidate.fullName.toLowerCase())) replaceAt--;
+      if (replaceAt < 0) break;
+      selectedNames.delete(selected[replaceAt].candidate.fullName.toLowerCase());
+      selected[replaceAt] = entry;
+    }
+    selectedNames.add(fullName);
+    rescueCount++;
+  }
+
+  selected.sort((a, b) => b.prefilterScore - a.prefilterScore);
+  return { intentEmbedding, entries: selected.slice(0, topN) };
+}

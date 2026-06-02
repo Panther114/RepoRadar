@@ -3,7 +3,7 @@
 -- but were only applied locally via `prisma db push`.
 
 -- CreateTable
-CREATE TABLE "repo_enrichments" (
+CREATE TABLE IF NOT EXISTS "repo_enrichments" (
     "id" UUID NOT NULL,
     "repo_id" UUID NOT NULL,
     "evidence_json" JSONB NOT NULL,
@@ -13,7 +13,7 @@ CREATE TABLE "repo_enrichments" (
 );
 
 -- CreateTable
-CREATE TABLE "search_candidate_caches" (
+CREATE TABLE IF NOT EXISTS "search_candidate_caches" (
     "id" UUID NOT NULL,
     "query_hash" TEXT NOT NULL,
     "candidates_json" JSONB NOT NULL,
@@ -23,16 +23,25 @@ CREATE TABLE "search_candidate_caches" (
 );
 
 -- CreateIndex
-CREATE UNIQUE INDEX "repo_enrichments_repo_id_key" ON "repo_enrichments"("repo_id");
+CREATE UNIQUE INDEX IF NOT EXISTS "repo_enrichments_repo_id_key" ON "repo_enrichments"("repo_id");
 
 -- CreateIndex
-CREATE INDEX "repo_enrichments_enriched_at_idx" ON "repo_enrichments"("enriched_at");
+CREATE INDEX IF NOT EXISTS "repo_enrichments_enriched_at_idx" ON "repo_enrichments"("enriched_at");
 
 -- CreateIndex
-CREATE UNIQUE INDEX "search_candidate_caches_query_hash_key" ON "search_candidate_caches"("query_hash");
+CREATE UNIQUE INDEX IF NOT EXISTS "search_candidate_caches_query_hash_key" ON "search_candidate_caches"("query_hash");
 
 -- CreateIndex
-CREATE INDEX "search_candidate_caches_created_at_idx" ON "search_candidate_caches"("created_at");
+CREATE INDEX IF NOT EXISTS "search_candidate_caches_created_at_idx" ON "search_candidate_caches"("created_at");
 
 -- AddForeignKey
-ALTER TABLE "repo_enrichments" ADD CONSTRAINT "repo_enrichments_repo_id_fkey" FOREIGN KEY ("repo_id") REFERENCES "repos"("id") ON DELETE CASCADE ON UPDATE CASCADE;
+DO $$
+BEGIN
+    IF NOT EXISTS (
+        SELECT 1 FROM pg_constraint WHERE conname = 'repo_enrichments_repo_id_fkey'
+    ) THEN
+        ALTER TABLE "repo_enrichments"
+        ADD CONSTRAINT "repo_enrichments_repo_id_fkey"
+        FOREIGN KEY ("repo_id") REFERENCES "repos"("id") ON DELETE CASCADE ON UPDATE CASCADE;
+    END IF;
+END $$;

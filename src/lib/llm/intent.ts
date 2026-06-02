@@ -2,6 +2,8 @@ import { z } from "zod";
 import type { Constraints, Intent, ProjectType, SearchFilters } from "@/lib/types";
 import { chatJson } from "@/lib/llm/json";
 import { INTENT_MODEL } from "@/lib/llm/client";
+import { findGuidanceHints, guidanceCanonicalNames } from "@/lib/search/guidance";
+import { buildLanguagePolicy, expandQuerySet } from "@/lib/search/queryPolicy";
 
 const PROJECT_TYPES: ProjectType[] = [
   "library", "framework", "cli", "app", "template", "demo", "research",
@@ -36,6 +38,7 @@ const intentSchema = z.object({
   minStars: z.number().nullable().optional(),
   maxStars: z.number().nullable().optional(),
   queries: z.array(z.string()).optional(),
+  canonicalNames: z.array(z.string()).optional(),
 });
 
 function normalizeProjectType(v: string | undefined): ProjectType {
@@ -60,6 +63,7 @@ function applyFilters(c: Constraints, filters?: SearchFilters): Constraints {
 /** Heuristic, LLM-free intent extraction used in NO_LLM_MODE or on LLM failure. */
 export function heuristicIntent(prompt: string, filters?: SearchFilters): Intent {
   const lower = prompt.toLowerCase();
+  const languagePolicy = buildLanguagePolicy(prompt, filters?.language);
 
   // Detect language ONLY from exact word tokens — NEVER substring. A substring
   // match (`"good".includes("go")` → Go) was silently injecting `language:Go`
@@ -67,9 +71,9 @@ export function heuristicIntent(prompt: string, filters?: SearchFilters): Intent
   // unambiguous as whole tokens, so exact membership is safe and generalizes
   // (no per-language regex). We keep `+`/`#` so "c++" / "c#" tokenize intact.
   const tokens = new Set(lower.split(/[^a-z0-9+#]+/).filter(Boolean));
-  let language: string | null = null;
+  let language: string | null = languagePolicy.hardLanguage;
   for (const [k, v] of Object.entries(KNOWN_LANGUAGES)) {
-    if (tokens.has(k)) { language = v; break; }
+    if (!language && tokens.has(k) && languagePolicy.hardLanguage) { language = v; break; }
   }
 
   const licenses: string[] = [];
@@ -119,6 +123,7 @@ export function heuristicIntent(prompt: string, filters?: SearchFilters): Intent
     normalizedPrompt: prompt.trim(),
     constraints,
     queries: buildQueries(constraints, prompt),
+    canonicalNames: guidanceCanonicalNames(prompt),
   };
 }
 
@@ -233,6 +238,7 @@ Return ONLY this JSON object (no prose, no markdown fences):
   "minStars": number | null,
   "maxStars": number | null,
   "queries": string[]                // 6-8 diverse GitHub search query strings
+  "canonicalNames": string[]         // up to 8 likely well-known repo full names or project names; guidance only, not ranking
 }`;
 
 /** Extract intent via the LLM, falling back to heuristics. */
@@ -241,19 +247,24 @@ export async function extractIntent(
   filters?: SearchFilters,
 ): Promise<Intent> {
   const fallback = heuristicIntent(prompt, filters);
+  const timeoutMs = Number(process.env.INTENT_TIMEOUT_MS) || 6_000;
 
-  const raw = await chatJson<unknown>({
-    system: INTENT_SYSTEM,
-    user: `Developer request: "${prompt}"\n\nUI filters already applied: ${JSON.stringify(filters ?? {})}`,
-    // Deterministic: identical prompts must yield identical queries + normalized
-    // prompt so the search/enrichment/scoring caches reliably hit on repeats.
-    temperature: 0,
-    // 768 covers the structured intent (aspects + keywords + 4-8 queries);
-    // trimmed from 900 to shave intent latency without dropping any field.
-    maxTokens: 768,
-    // Use the fast intent model — this is structured extraction, not deep reasoning.
-    model: INTENT_MODEL,
-  });
+  const raw = await Promise.race([
+    chatJson<unknown>({
+      system: INTENT_SYSTEM,
+      user: `Developer request: "${prompt}"\n\nUI filters already applied: ${JSON.stringify(filters ?? {})}`,
+      // Deterministic: identical prompts must yield identical queries + normalized
+      // prompt so the search/enrichment/scoring caches reliably hit on repeats.
+      temperature: 0,
+      // 768 covers the structured intent (aspects + keywords + 4-8 queries);
+      // trimmed from 900 to shave intent latency without dropping any field.
+      maxTokens: 768,
+      // Use the fast intent model — this is structured extraction, not deep reasoning.
+      model: INTENT_MODEL,
+      timeoutMs,
+    }),
+    new Promise<null>((resolve) => setTimeout(() => resolve(null), timeoutMs)),
+  ]);
   if (!raw) return fallback;
 
   const parsed = intentSchema.safeParse(raw);
@@ -268,7 +279,8 @@ export async function extractIntent(
   // which GitHub classifies as TypeScript (redux, zustand, jotai, mobx, …).
   // Language still shapes ranking softly via embeddings + the scorer's JS/TS-aware
   // language match — it just no longer silently destroys candidate recall.
-  const explicitLanguage = fallback.constraints.language; // UI filter or prompt token only
+  const languagePolicy = buildLanguagePolicy(prompt, filters?.language);
+  const explicitLanguage = languagePolicy.hardLanguage;
 
   const constraints: Constraints = applyFilters(
     {
@@ -305,11 +317,30 @@ export async function extractIntent(
     ? Array.from(new Set(d.queries.map(sanitizeQuery).filter(Boolean))).slice(0, 8)
     : null;
 
-  const queries = llmQueries?.length ? llmQueries : buildQueries(constraints, prompt);
+  const guidanceHints = findGuidanceHints(prompt);
+  const canonicalNames = Array.from(new Set([
+    ...(d.canonicalNames ?? []),
+    ...guidanceHints.flatMap((hint) => hint.repoNames),
+    ...(fallback.canonicalNames ?? []),
+  ])).slice(0, 8);
 
-  return {
+  const baseIntent: Intent = {
     normalizedPrompt: d.normalizedPrompt?.trim() || prompt.trim(),
     constraints,
+    queries: llmQueries?.length ? llmQueries : buildQueries(constraints, prompt),
+    canonicalNames,
+  };
+  const queries = expandQuerySet({
+    rawPrompt: prompt,
+    intent: baseIntent,
+    guidanceHints,
+    canonicalNames,
+  });
+
+  return {
+    normalizedPrompt: baseIntent.normalizedPrompt,
+    constraints,
     queries,
+    canonicalNames,
   };
 }

@@ -18,11 +18,25 @@ function print(obj) {
   console.log(JSON.stringify(obj, null, 2));
 }
 
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
 async function get(path) {
-  const res = await fetch(`${BASE}${path}`);
-  const body = await res.json();
-  if (!res.ok) throw Object.assign(new Error(`HTTP ${res.status}`), { body });
-  return body;
+  let lastError;
+  for (let attempt = 1; attempt <= 4; attempt++) {
+    try {
+      const res = await fetch(`${BASE}${path}`);
+      const body = await res.json();
+      if (!res.ok) throw Object.assign(new Error(`HTTP ${res.status}`), { body });
+      return body;
+    } catch (error) {
+      lastError = error;
+      if (attempt === 4) break;
+      await sleep(750 * attempt);
+    }
+  }
+  throw lastError;
 }
 
 async function post(path, payload) {
@@ -50,7 +64,7 @@ async function poll(searchId, intervalMs = 2000) {
       process.stdout.write("\n");
       return data;
     }
-    await new Promise((r) => setTimeout(r, intervalMs));
+    await sleep(intervalMs);
   }
 }
 
@@ -84,7 +98,7 @@ const commands = {
       const fut   = r.scores?.future?.toFixed(2)     ?? "?";
       const under = r.scores?.underrated?.toFixed(2) ?? "?";
       const total = r.scores?.total?.toFixed(2)      ?? "?";
-      const stars = r.repo?.stars ?? r.repo?.stargazersCount ?? "?";
+      const stars = r.metrics?.stars ?? r.repo?.stars ?? r.repo?.stargazersCount ?? "?";
       const name  = r.repo?.fullName ?? "unknown";
       console.log(`${String(i + 1).padStart(2)}. ${name}`);
       console.log(`    Fit:${fit}  Future:${fut}  Underrated:${under}  Total:${total}  ⭐${stars}`);

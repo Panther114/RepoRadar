@@ -50,6 +50,7 @@ export async function chatJson<T = unknown>(args: {
   temperature?: number;
   maxTokens?: number;
   model?: string;
+  timeoutMs?: number;
 }): Promise<T | null> {
   const client = getLlmClient();
   if (!client) return null;
@@ -61,7 +62,7 @@ export async function chatJson<T = unknown>(args: {
     ];
     // Hard timeout so a throttled/slow provider can't stall the whole batch.
     // The caller falls back to the deterministic scorer when this returns null.
-    const timeoutMs = Number(process.env.LLM_TIMEOUT_MS) || 12_000;
+    const timeoutMs = args.timeoutMs ?? (Number(process.env.LLM_TIMEOUT_MS) || 12_000);
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), timeoutMs);
     try {
