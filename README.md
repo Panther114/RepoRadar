@@ -48,18 +48,14 @@ It is built for two audiences:
 
 ## How it works
 
-```mermaid
-flowchart LR
-  A["Plain-English repo need"] --> B["Intent + filter extraction"]
-  B --> C["GitHub search variants"]
-  C --> D["Deduped candidate pool"]
-  D --> E["Deterministic funnel"]
-  E --> F["Evidence enrichment"]
-  F --> G["Fit / Future / Underrated scoring"]
-  G --> H["Ranked results + compare + detail pages"]
-  E -. cache hit .-> D
-  F -. cache hit .-> F
-```
+| Stage | What happens | Output |
+|---|---|---|
+| 1 | You describe the repository you need in plain English. | Search intent |
+| 2 | RepoRadar expands the prompt into several GitHub-compatible queries. | Query variants |
+| 3 | GitHub search returns candidates, which are deduped and filtered. | Candidate pool |
+| 4 | The deterministic funnel narrows the pool with local embeddings and cheap signals. | Smaller shortlist |
+| 5 | Survivors are enriched with README, manifest, release, issue, and contributor evidence. | Evidence bundle |
+| 6 | Fit, Future, and Underrated scores are computed and explained. | Ranked results |
 
 The pipeline is deterministic first and model-assisted second:
 
