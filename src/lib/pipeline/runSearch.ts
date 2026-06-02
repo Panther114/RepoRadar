@@ -380,15 +380,29 @@ export async function runSearch(
     //   - AI-scored: LLM fit is semantically precise → weight it heavily.
     //   - Deterministic: ONNX similarity is the best raw relevance signal →
     //     blend it equally with the noisier keyword-based fit score.
+    // Establishment prior. MiniLM cosine similarities are compressed into a
+    // narrow band (≈0.6–0.8), so relevance alone can't separate the canonical
+    // library from an obscure exact-keyword match — a 500-star dead repo and a
+    // 60k-star standard score nearly the same. A log-scaled popularity term
+    // breaks that tie toward the proven project. It is GATED by relevance
+    // (multiplied in, not added) so a popular-but-irrelevant repo gets no lift,
+    // and CAPPED low so a genuinely strong small repo still surfaces — the
+    // "hidden gems" promise stays intact.
+    const POP_WEIGHT = Number(process.env.POPULARITY_WEIGHT) || 0.25;
+    const popularityPrior = (stars: number): number =>
+      Math.min(1, Math.log10(Math.max(stars, 0) + 1) / 6); // ~0.5@1k, 0.8@60k, 1@1M
+
     const rankScore = (s: (typeof scored)[0]): number => {
       const sim = s.evidence.similarity;
-      if (s.analysis.source === "ai") {
-        // Trust the LLM's fit judgement; similarity is a minor tiebreaker.
-        return s.analysis.fit * 0.85 + sim * 0.15;
-      }
-      // Deterministic: fit and similarity are complementary signals of the
-      // same underlying relevance — blend them equally.
-      return s.analysis.fit * 0.60 + sim * 0.40;
+      const relevance =
+        s.analysis.source === "ai"
+          ? // Trust the LLM's fit judgement; similarity is a minor tiebreaker.
+            s.analysis.fit * 0.85 + sim * 0.15
+          : // Deterministic: fit and similarity are complementary relevance
+            // signals — blend them equally.
+            s.analysis.fit * 0.6 + sim * 0.4;
+      const pop = popularityPrior(s.evidence.candidate.stars);
+      return relevance * (1 + POP_WEIGHT * pop);
     };
     scored.sort((a, b) => rankScore(b) - rankScore(a));
 

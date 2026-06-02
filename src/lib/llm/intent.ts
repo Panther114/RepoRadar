@@ -260,6 +260,16 @@ export async function extractIntent(
   if (!parsed.success) return fallback;
   const d = parsed.data;
 
+  // Language is a HARD filter on GitHub (`language:X` excludes everything else),
+  // so we only honor it when the user stated it EXPLICITLY — via the UI filter
+  // or an exact language token in the prompt (both captured by the heuristic in
+  // `fallback.constraints.language`). The LLM's *inferred* language is dropped:
+  // guessing "JavaScript" for a React query hard-excludes the canonical answers,
+  // which GitHub classifies as TypeScript (redux, zustand, jotai, mobx, …).
+  // Language still shapes ranking softly via embeddings + the scorer's JS/TS-aware
+  // language match — it just no longer silently destroys candidate recall.
+  const explicitLanguage = fallback.constraints.language; // UI filter or prompt token only
+
   const constraints: Constraints = applyFilters(
     {
       keywords: d.keywords?.length ? d.keywords : fallback.constraints.keywords,
@@ -268,7 +278,7 @@ export async function extractIntent(
       // normalized prompt as a single aspect (≡ single-vector) if the model
       // didn't decompose, so behaviour degrades gracefully.
       aspects: d.aspects?.filter((a) => a.trim().length > 0) ?? [],
-      language: d.language ?? fallback.constraints.language,
+      language: explicitLanguage,
       licenses: d.licenses ?? [],
       pushedWithinDays: d.pushedWithinDays ?? fallback.constraints.pushedWithinDays,
       projectType: normalizeProjectType(d.projectType),
@@ -280,15 +290,16 @@ export async function extractIntent(
     filters,
   );
 
-  // Sanitize LLM-emitted queries: models sometimes invent `language:any`, which
-  // GitHub treats as a real language named "any" → those query slots return
-  // nothing and waste recall. Strip these placeholder qualifiers (normalization,
-  // not a relevance heuristic) and drop any query left empty.
-  const sanitizeQuery = (q: string): string =>
-    q
-      .replace(/\blanguage:(any|all|none|n\/a)\b/gi, "")
-      .replace(/\s{2,}/g, " ")
-      .trim();
+  // Take FULL control of the `language:` qualifier in every query. We strip
+  // whatever language the LLM emitted (its guess over-constrains and tanks
+  // recall — see above) and re-append the user's explicit language only when
+  // they actually specified one. This also removes invalid `language:any`
+  // placeholders that GitHub would treat as a real language named "any".
+  const sanitizeQuery = (q: string): string => {
+    let out = q.replace(/\blanguage:[^\s]+/gi, "").replace(/\s{2,}/g, " ").trim();
+    if (explicitLanguage) out = `${out} language:${explicitLanguage}`.trim();
+    return out;
+  };
 
   const llmQueries = d.queries?.length
     ? Array.from(new Set(d.queries.map(sanitizeQuery).filter(Boolean))).slice(0, 8)

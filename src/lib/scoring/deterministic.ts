@@ -31,6 +31,19 @@ function daysSince(iso: string | null): number {
   return Number.isFinite(t) ? (Date.now() - t) / 86400_000 : Infinity;
 }
 
+// JavaScript and TypeScript are interchangeable for discovery purposes: GitHub
+// classifies a repo by its dominant language, so a TS-majority project (redux,
+// zustand) and a JS-majority one solve the same need. Treating them as a match
+// stops the language component from punishing the canonical answer to a JS/TS
+// query just because GitHub happened to label it the other one.
+const JS_TS = new Set(["javascript", "typescript"]);
+function languageMatches(repoLang: string | null, want: string): boolean {
+  const a = (repoLang ?? "").toLowerCase();
+  const b = want.toLowerCase();
+  if (a === b) return true;
+  return JS_TS.has(a) && JS_TS.has(b);
+}
+
 function recency(iso: string | null): number {
   const d = daysSince(iso);
   if (d < 30) return 1;
@@ -119,7 +132,7 @@ export function deterministicScore(intent: Intent, e: RepoEvidence): Analysis {
 
   const langMatch = !c.language
     ? 0.8
-    : (e.candidate.primaryLanguage ?? "").toLowerCase() === c.language.toLowerCase()
+    : languageMatches(e.candidate.primaryLanguage, c.language)
       ? 1
       : 0.3;
 
