@@ -24,6 +24,11 @@ COPY --from=deps /app/node_modules ./node_modules
 COPY . .
 ENV NEXT_TELEMETRY_DISABLED=1
 ENV NODE_ENV=production
+# Tell env.ts to skip Zod validation at build time. Railway (and any CI)
+# doesn't inject secrets during `docker build` — they're runtime-only.
+# This flag is intentionally absent from the `run` stage so full validation
+# runs at server startup and catches misconfigured deployments early.
+ENV SKIP_ENV_VALIDATION=1
 # prisma generate reads the schema and generates TS types — it does NOT
 # require DATABASE_URL (no DB connection at build time). DATABASE_URL is only
 # needed at runtime for `prisma migrate deploy` in the CMD below.

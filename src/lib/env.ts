@@ -3,8 +3,13 @@ import { z } from "zod";
 /**
  * Server-side environment configuration, validated once at module load.
  * Never import this from client components.
+ *
+ * During `next build` on Railway (or any CI environment), secrets are not
+ * injected — they are runtime-only. Set SKIP_ENV_VALIDATION=1 in the build
+ * stage to let the build complete; validation still runs at server startup.
  */
 const schema = z.object({
+  // Optional during build (SKIP_ENV_VALIDATION=1); required at runtime.
   DATABASE_URL: z.string().min(1, "DATABASE_URL is required"),
   GITHUB_TOKEN: z.string().optional().default(""),
   OPENROUTER_API_KEY: z.string().optional().default(""),
@@ -58,15 +63,36 @@ const schema = z.object({
 
 const parsed = schema.safeParse(process.env);
 
+// SKIP_ENV_VALIDATION=1 is set in the Dockerfile build stage only.
+// At build time Next.js loads every route module to read its exported
+// metadata (runtime, dynamic, etc.) — it never calls the handlers, so
+// placeholder values are safe and never reach the database.
+const skipValidation = process.env.SKIP_ENV_VALIDATION === "1";
+
+let envData: z.infer<typeof schema>;
+
 if (!parsed.success) {
-  // Surface a readable error instead of a cryptic stack at first DB/LLM call.
-  const issues = parsed.error.issues
-    .map((i) => `  - ${i.path.join(".")}: ${i.message}`)
-    .join("\n");
-  throw new Error(`Invalid environment configuration:\n${issues}`);
+  if (skipValidation) {
+    // Provide enough defaults for module initialisation. The placeholder
+    // DATABASE_URL is never used because route handlers are not invoked
+    // during `next build`.
+    const result = schema.safeParse({
+      DATABASE_URL: "postgresql://build:skip@localhost:5432/build",
+    });
+    // result will always succeed because all other fields have defaults.
+    envData = result.success ? result.data : ({} as z.infer<typeof schema>);
+  } else {
+    // Surface a readable error instead of a cryptic stack at first DB/LLM call.
+    const issues = parsed.error.issues
+      .map((i) => `  - ${i.path.join(".")}: ${i.message}`)
+      .join("\n");
+    throw new Error(`Invalid environment configuration:\n${issues}`);
+  }
+} else {
+  envData = parsed.data;
 }
 
-export const env = parsed.data;
+export const env = envData;
 
 /**
  * The LLM is only used when not in NO_LLM_MODE *and* a key is present.
