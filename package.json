@@ -44,6 +44,6 @@
     "typescript": "^5"
   },
   "pnpm": {
-    "neverBuiltDependencies": ["sharp", "unrs-resolver"]
+    "neverBuiltDependencies": ["unrs-resolver"]
   }
 }
