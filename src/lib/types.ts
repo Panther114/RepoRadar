@@ -158,11 +158,10 @@ export interface ListwiseRankedResult {
   fullName: string;
   rank: number;
   fit: number;
+  /** Model verdict: false = off-topic / low-quality, demote below all relevant repos. */
+  relevant: boolean;
   repoTypes: RepoTypeClassification[];
   summary: string;
-  matchedFeatures: MatchedFeature[];
-  missingFeatures: MissingFeature[];
-  risks: Risk[];
 }
 
 export interface SearchDiagnostics {

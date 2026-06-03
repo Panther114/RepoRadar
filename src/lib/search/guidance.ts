@@ -59,19 +59,26 @@ const GUIDANCE: GuidanceHint[] = [
   },
 ];
 
+// A hint must match on at least this many distinct prompt tokens before it
+// fires. A single shared generic word ("react", "api", "data") is NOT enough —
+// that loose matching let "react data table" trigger the react-state hint and
+// inject zustand/jotai/redux as canonical rescues, polluting the shortlist.
+const MIN_HINT_SCORE = 2;
+
 function scoreHint(text: string, hint: GuidanceHint): number {
   const haystack = `${hint.match} ${hint.terms.join(" ")} ${hint.repoNames.join(" ")}`.toLowerCase();
-  return text
-    .toLowerCase()
-    .split(/[^a-z0-9+#]+/)
-    .filter((tok) => tok.length > 2)
-    .reduce((score, tok) => score + (haystack.includes(tok) ? 1 : 0), 0);
+  // Count DISTINCT matching tokens (a repeated word shouldn't inflate the score).
+  const matched = new Set<string>();
+  for (const tok of text.toLowerCase().split(/[^a-z0-9+#]+/)) {
+    if (tok.length > 2 && haystack.includes(tok)) matched.add(tok);
+  }
+  return matched.size;
 }
 
 export function findGuidanceHints(prompt: string, limit = 3): GuidanceHint[] {
   return GUIDANCE
     .map((hint) => ({ hint, score: scoreHint(prompt, hint) }))
-    .filter((x) => x.score > 0)
+    .filter((x) => x.score >= MIN_HINT_SCORE)
     .sort((a, b) => b.score - a.score)
     .slice(0, limit)
     .map((x) => x.hint);

@@ -19,6 +19,15 @@ Search by intent. Rank by fit, evidence, health, risk, and underrated potential.
 
 ---
 
+<div align="center">
+
+<video controls autoplay muted loop playsinline width="100%" style="max-width: 980px; border-radius: 16px;">
+  <source src="./public/reporadar-demo.mp4" type="video/mp4" />
+  Your browser does not support the embedded demo video.
+</video>
+
+</div>
+
 ![RepoRadar evidence-ranked shortlist concept](./public/readme-evidence-ranking.png)
 
 ## What It Solves
@@ -62,9 +71,9 @@ rather than popularity alone.
 | Intent | Parses the user's plain-English need into search constraints | Short prompts become structured searches |
 | GitHub search | Runs multiple query variants against GitHub | Improves recall beyond one keyword phrase |
 | Candidate cache | Reuses fresh candidate pools when possible | Keeps repeated searches faster and cheaper |
-| Vector funnel | Uses local embeddings to narrow the pool | Drops weak matches before expensive enrichment |
+| Vector funnel | Uses local embeddings (conjunctive per-aspect) plus a credibility floor to narrow the pool | Drops weak matches and keyword-stuffed 0-signal repos before expensive enrichment |
 | Enrichment | Fetches README, manifests, releases, issues, PRs, contributors, and metadata | Scores are grounded in observable evidence |
-| Scoring | Produces Fit, Future, Underrated, and risk signals | Results are ranked for actual usefulness |
+| Scoring | One listwise pass ranks survivors and flags off-topic repos; produces Fit, Future, Underrated, and risk signals | Results are ranked for actual usefulness, and irrelevant repos are demoted instead of padding the shortlist |
 
 ## What You Get On Screen
 
@@ -138,6 +147,7 @@ Important environment variables:
 | `INTENT_TIMEOUT_MS` | Timeout for intent extraction |
 | `LISTWISE_TIMEOUT_MS` | Timeout for listwise ranking |
 | `SEARCH_ETA_SECONDS` | Progress-bar estimate, currently calibrated around `67` |
+| `SEARCH_DEBUG` | When `true`, writes per-candidate funnel/ranking traces to `logs/search-debug.jsonl` (local tuning only) |
 
 ## Search Quality Diagnostics
 
@@ -150,6 +160,18 @@ node scripts/search-benchmark.mjs --limit 6
 It uses general-user prompts such as `browser testing`, `notion editor`, and `simple react state`.
 It reports top repositories, expected-known repo presence, latency, and diagnostic evidence in
 `logs/search-diagnostics.jsonl`.
+
+For a single ad-hoc query you can run the local runner and print the ranked shortlist with
+per-repo fit/future/similarity/source:
+
+```bash
+node scripts/run-search.mjs "kubernetes monitoring and observability"
+```
+
+Set `SEARCH_DEBUG=true` first to also capture per-candidate funnel scores (similarity, aspect
+sims, prefilter score, survivor flags) and final rank scores in `logs/search-debug.jsonl` — the
+fastest way to see *why* a repo was kept, dropped, or ranked where it was. The `logs/` directory
+is gitignored.
 
 ## Local Docs
 

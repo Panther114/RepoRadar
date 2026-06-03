@@ -26,6 +26,7 @@ import { analysisInputHash, hashJson, sha256 } from "@/lib/cache/keys";
 import { createLogger } from "@/lib/logger";
 import { findGuidanceHints } from "@/lib/search/guidance";
 import { writeSearchDiagnostics } from "@/lib/pipeline/diagnostics";
+import { debugTrace, searchDebugEnabled } from "@/lib/pipeline/debugTrace";
 import type { Analysis, Candidate, Intent, RepoEvidence, SearchDiagnostics, SearchFilters } from "@/lib/types";
 
 const log = createLogger("pipeline");
@@ -319,6 +320,7 @@ export async function runSearch(
         env.FUNNEL_TOP_N,
         lightEvidence,
         intent.canonicalNames ?? [],
+        { searchQueryId },
       );
       doneFunnel();
       searchLog.info("Funnel complete", { survivors: funnelResult.entries.length });
@@ -538,6 +540,22 @@ export async function runSearch(
       return relevance * (1 + POP_WEIGHT * pop);
     };
     if (!listwiseApplied) scored.sort((a, b) => rankScore(b) - rankScore(a));
+
+    if (searchDebugEnabled()) {
+      debugTrace("final-rank", searchQueryId, {
+        listwiseApplied,
+        results: scored.map((s, i) => ({
+          finalRank: i + 1,
+          repo: s.evidence.candidate.fullName,
+          stars: s.evidence.candidate.stars,
+          source: s.analysis.source,
+          fit: Number(s.analysis.fit.toFixed(4)),
+          future: Number(s.analysis.future.toFixed(4)),
+          similarity: Number(s.evidence.similarity.toFixed(4)),
+          rankScore: Number(rankScore(s).toFixed(4)),
+        })),
+      });
+    }
 
     const minFuture = filters?.minFutureScore ?? null;
     let rank = 1;

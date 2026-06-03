@@ -1,5 +1,6 @@
 import { embedBatch, cosineSimilarity } from "@/lib/embeddings/embedder";
 import { clamp01 } from "@/lib/scoring/rubric";
+import { debugTrace, searchDebugEnabled } from "@/lib/pipeline/debugTrace";
 import type { Candidate, Constraints, Intent, LightRepoEvidence } from "@/lib/types";
 
 export interface FunnelEntry {
@@ -38,12 +39,18 @@ function licenseScore(spdx: string | null, licenses: string[]): number {
   return licenses.some((l) => l.toLowerCase() === norm) ? 1 : 0.3;
 }
 
-function starsScore(stars: number, includeSmall: boolean): number {
-  if (includeSmall) return 1; // don't penalize small repos
-  if (stars >= 500) return 1;
-  if (stars >= 100) return 0.8;
-  if (stars >= 20) return 0.6;
-  return 0.4;
+/**
+ * Credibility prior: separates repos with at least SOME real-world traction from
+ * 0-star personal/tutorial/homework repos whose keyword-stuffed names score high
+ * embedding similarity (e.g. "End-to-End-Observability-Stack-…-in-Kubernetes")
+ * yet are never the best answer. Forks count double — a forked-from-nobody repo
+ * with 30 stars is more credible than a 30-star island. Saturates by ~500 stars
+ * so genuine hidden gems (tens–hundreds of stars) are NOT penalised; only the
+ * true 0-signal bottom is. Disabled when the user explicitly wants small repos.
+ */
+function credibilityScore(stars: number, forks: number, includeSmall: boolean): number {
+  if (includeSmall) return 1;
+  return clamp01(Math.log10(Math.max(stars, 0) + 2 * Math.max(forks, 0) + 1) / 2.2);
 }
 
 function candidateText(c: Candidate, light?: LightRepoEvidence): string {
@@ -109,6 +116,7 @@ export async function narrowCandidates(
   topN: number,
   lightEvidence?: Map<number, LightRepoEvidence>,
   rescuedNames: string[] = [],
+  debugContext?: { searchQueryId: string },
 ): Promise<FunnelResult> {
   const c = intent.constraints;
   const candTexts = candidates.map((candidate) => candidateText(candidate, lightEvidence?.get(candidate.githubId)));
@@ -132,13 +140,15 @@ export async function narrowCandidates(
   const aspectEmbeddings = embeddings.slice(1, 1 + aspects.length);
   const candEmbeddings = embeddings.slice(1 + aspects.length);
 
+  const debugRows: Record<string, unknown>[] = [];
   const entries: FunnelEntry[] = candidates.map((candidate, i) => {
     const candEmb = candEmbeddings[i];
     const wholeSim = clamp01((cosineSimilarity(intentEmbedding, candEmb) + 1) / 2);
 
     let similarity: number;
+    let aspectSims: number[] = [];
     if (useAspects) {
-      const aspectSims = aspectEmbeddings.map((ae) =>
+      aspectSims = aspectEmbeddings.map((ae) =>
         clamp01((cosineSimilarity(ae, candEmb) + 1) / 2),
       );
       // Blend: the conjunctive aspect match dominates (relevance), with the
@@ -148,13 +158,26 @@ export async function narrowCandidates(
       similarity = wholeSim;
     }
 
+    if (searchDebugEnabled()) {
+      debugRows.push({
+        repo: candidate.fullName,
+        stars: candidate.stars,
+        wholeSim: Number(wholeSim.toFixed(4)),
+        aspectSims: aspectSims.map((s) => Number(s.toFixed(4))),
+        worstAspect: aspectSims.length ? Number(Math.min(...aspectSims).toFixed(4)) : null,
+        similarity: Number(similarity.toFixed(4)),
+      });
+    }
+
     const prefilterScore = clamp01(
       // Semantic similarity is the strongest relevance gate; keep stars bias low
-      // so popular-but-irrelevant repos don't crowd out closer matches.
-      0.80 * similarity +
-        0.11 * recencyScore(candidate.pushedAt, c.pushedWithinDays) +
+      // so popular-but-irrelevant repos don't crowd out closer matches. The
+      // credibility term is the floor that keeps 0-star keyword-stuffed names
+      // out of the shortlist without penalising genuine small/hidden-gem repos.
+      0.68 * similarity +
+        0.10 * recencyScore(candidate.pushedAt, c.pushedWithinDays) +
         0.06 * licenseScore(candidate.licenseSpdx, c.licenses) +
-        0.03 * starsScore(candidate.stars, c.includeSmallProjects),
+        0.16 * credibilityScore(candidate.stars, candidate.forks, c.includeSmallProjects),
     );
     return { candidate, similarity, prefilterScore, intentEmbedding };
   });
@@ -169,12 +192,22 @@ export async function narrowCandidates(
       .filter((name) => name.includes("/")),
   );
 
+  // Similarity gate for rescues. A guidance/LLM "canonical" name is only a HINT,
+  // not ground truth — loose matching can suggest an off-domain popular repo
+  // (e.g. a state-manager for a "data table" query). Only force-rescue a repo
+  // that is at least nearly as relevant as the weakest naturally-selected
+  // survivor; otherwise the rescue would displace a genuine match with noise.
+  const naturalSims = selected.map((entry) => entry.similarity);
+  const minNaturalSim = naturalSims.length ? Math.min(...naturalSims) : 0;
+  const rescueFloor = minNaturalSim * 0.9;
+
   const maxRescues = Math.min(3, topN);
   let rescueCount = selected.filter((entry) => rescued.has(entry.candidate.fullName.toLowerCase())).length;
   for (const entry of entries) {
     if (rescueCount >= maxRescues) break;
     const fullName = entry.candidate.fullName.toLowerCase();
     if (!rescued.has(fullName) || selectedNames.has(fullName)) continue;
+    if (entry.similarity < rescueFloor) continue; // off-domain canonical hint — skip
     if (selected.length < topN) {
       selected.push(entry);
     } else {
@@ -189,5 +222,27 @@ export async function narrowCandidates(
   }
 
   selected.sort((a, b) => b.prefilterScore - a.prefilterScore);
-  return { intentEmbedding, entries: selected.slice(0, topN) };
+  const finalEntries = selected.slice(0, topN);
+
+  if (searchDebugEnabled() && debugContext) {
+    const prefilterByRepo = new Map(entries.map((e) => [e.candidate.fullName, e.prefilterScore]));
+    const survivorSet = new Set(finalEntries.map((e) => e.candidate.fullName));
+    const ranked = [...debugRows]
+      .map((row) => ({
+        ...row,
+        prefilterScore: Number((prefilterByRepo.get(String(row.repo)) ?? 0).toFixed(4)),
+        survived: survivorSet.has(String(row.repo)),
+      }))
+      .sort((a, b) => (b.prefilterScore as number) - (a.prefilterScore as number));
+    debugTrace("funnel", debugContext.searchQueryId, {
+      poolSize: candidates.length,
+      topN,
+      useAspects,
+      aspects,
+      normalizedPrompt: intent.normalizedPrompt,
+      ranked,
+    });
+  }
+
+  return { intentEmbedding, entries: finalEntries };
 }

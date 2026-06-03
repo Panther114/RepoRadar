@@ -170,11 +170,9 @@ describe("search quality policy", () => {
           fullName: "microsoft/playwright",
           rank: 1,
           fit: 0.95,
+          relevant: true,
           repoTypes: [{ type: "library", confidence: 0.9 }],
           summary: "Best match for browser testing.",
-          matchedFeatures: [],
-          missingFeatures: [],
-          risks: [],
         },
       ],
     });
@@ -182,6 +180,27 @@ describe("search quality policy", () => {
     assert.equal(ranked[0].evidence.candidate.fullName, "microsoft/playwright");
     assert.equal(ranked[0].analysis.future, 0.9);
     assert.equal(ranked[0].analysis.source, "ai");
+  });
+
+  it("demotes repos the listwise model flags as irrelevant below relevant ones", () => {
+    const onTopic = candidate(1, "microsoft/playwright", 70000);
+    const offTopic = candidate(2, "pmndrs/zustand", 50000);
+    const ranked = applyListwiseRanking({
+      evidences: [evidence(offTopic), evidence(onTopic)],
+      baselines: [
+        { repoType: "library", fit: 0.6, future: 0.9, underrated: 0.1, total: 0.6, fitComponents: {}, futureComponents: {}, matchedFeatures: [], missingFeatures: [], risks: [], summary: "", source: "deterministic" },
+        { repoType: "library", fit: 0.6, future: 0.9, underrated: 0.1, total: 0.6, fitComponents: {}, futureComponents: {}, matchedFeatures: [], missingFeatures: [], risks: [], summary: "", source: "deterministic" },
+      ],
+      listwise: [
+        { fullName: "pmndrs/zustand", rank: 1, fit: 0.8, relevant: false, repoTypes: [{ type: "library", confidence: 0.9 }], summary: "Off topic." },
+        { fullName: "microsoft/playwright", rank: 2, fit: 0.7, relevant: true, repoTypes: [{ type: "library", confidence: 0.9 }], summary: "On topic." },
+      ],
+    });
+
+    // Despite a lower rank number, the relevant repo must come first.
+    assert.equal(ranked[0].evidence.candidate.fullName, "microsoft/playwright");
+    assert.equal(ranked[1].evidence.candidate.fullName, "pmndrs/zustand");
+    assert(ranked[1].analysis.fit <= 0.4);
   });
 
   it("keeps benchmark prompts short and hard-caps limit at ten", () => {
