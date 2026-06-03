@@ -2,7 +2,7 @@
 
 All notable changes to RepoRadar are recorded here.
 
-## Unreleased
+## v1.1.2
 
 - Search relevance overhaul focused on making all 15 results genuinely the best matches:
   - **Reliable listwise ranking.** The single listwise rerank pass was silently truncating its
