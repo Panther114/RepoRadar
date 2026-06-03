@@ -2,6 +2,12 @@
 
 All notable changes to RepoRadar are recorded here.
 
+## v1.1.1
+
+- Added persistent top-bar metrics for total unique visitors and total search requests.
+- The version badge now advances with the release so the UI and changelog stay aligned.
+- Created the reusable `update-version` skill so future release bumps follow one workflow.
+
 ## v1.1.0
 
 - Massive search upgrade: intent expansion, deduping, deterministic funneling, and evidence-first

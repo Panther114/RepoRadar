@@ -185,3 +185,16 @@ model SearchJob {
   @@index([searchQueryId])
   @@map("search_jobs")
 }
+
+model SiteVisitor {
+  id          String   @id @default(uuid()) @db.Uuid
+  visitorId   String   @unique @map("visitor_id")
+  firstSeenAt DateTime @default(now()) @map("first_seen_at")
+  lastSeenAt  DateTime @default(now()) @map("last_seen_at")
+  lastPath    String?  @map("last_path")
+  userAgent   String?  @map("user_agent")
+  referrer    String?  @map("referrer")
+
+  @@index([lastSeenAt])
+  @@map("site_visitors")
+}
