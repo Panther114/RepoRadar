@@ -121,7 +121,7 @@ export default async function StatusPage() {
           icon={Clock}
           label="Typical search time"
           ok={null}
-          value="30–40 s"
+          value="60-70 s"
           detail="Cold search · warm repeat searches are faster"
         />
       </div>

@@ -308,7 +308,7 @@ def main() -> None:
     img.paste(mascot_small, (96, 54), mascot_small)
     draw.text((242, 58), "RepoRadar Core Workflow", font=roca(58), fill=INK)
     draw.text((244, 128), "Plain-English need to evidence-ranked GitHub shortlist", font=roca(30), fill=INK_SOFT)
-    draw.text((W - 408, 86), "Fresh search ETA: 40s", font=roca(31), fill=ORANGE_DARK)
+    draw.text((W - 482, 86), "Fresh search ETA: about 70s", font=roca(31), fill=ORANGE_DARK)
 
     top = [
         browser_card(draw, audit, 265, "User Search", "prompt + filters", ">_"),

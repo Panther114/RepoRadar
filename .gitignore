@@ -39,6 +39,8 @@ devlog.txt
 dev-*.txt
 prod-*.txt
 /logs/
+__pycache__/
+/*.mp4
 
 # vercel
 .vercel
