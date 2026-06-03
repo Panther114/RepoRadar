@@ -1,4 +1,5 @@
 import { prisma } from "@/lib/db";
+import { unstable_noStore as noStore } from "next/cache";
 
 export type HeaderMetrics = {
   userCount: number | null;
@@ -6,6 +7,7 @@ export type HeaderMetrics = {
 };
 
 export async function getHeaderMetrics(): Promise<HeaderMetrics> {
+  noStore();
   try {
     const [userCount, requestCount] = await prisma.$transaction([
       prisma.siteVisitor.count(),
