@@ -2,9 +2,9 @@
 
 # RepoRadar
 
-### The best repository in the world is useless if nobody can find it.
+### Find the right open-source project by what it does, not by what it’s called.
 
-Search GitHub by what a repository does, not by what it is called.
+Search GitHub by intent, then rank repos by fit, evidence, and health instead of popularity.
 
 [![Next.js](https://img.shields.io/badge/Next.js-16-black?logo=next.js)](https://nextjs.org)
 [![TypeScript](https://img.shields.io/badge/TypeScript-strict-3178c6?logo=typescript&logoColor=white)](https://www.typescriptlang.org/)
@@ -13,20 +13,25 @@ Search GitHub by what a repository does, not by what it is called.
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](./LICENSE)
 [![PRs welcome](https://img.shields.io/badge/PRs-welcome-38bdf8.svg)](#contributing)
 
+[Live demo](https://reporadar.up.railway.app/) · [Quick start](#quick-start) · [Why star this](#why-star-this)
+
 </div>
 
 ---
 
+![RepoRadar core workflow diagram](./public/readme-workflow.png)
+
 ## What it is
 
-RepoRadar is a semantic GitHub repository discovery and evaluation engine. You type a plain-English
-need, it finds candidate repositories, enriches them with evidence, scores them transparently, and
-returns a ranked shortlist with explanations.
+RepoRadar is a semantic GitHub repository discovery and evaluation engine. You describe the repo
+you need in plain English, it finds candidate repositories, enriches them with evidence, scores
+them transparently, and returns a ranked shortlist with explanations.
 
 It is built for two audiences:
 
 - Builders who need the right repo fast.
 - Maintainers who want strong projects to be found on merit, not star count.
+- Anyone who wants to stop scrolling through popularity bias.
 
 ## At a glance
 
@@ -39,6 +44,15 @@ It is built for two audiences:
 | ETA | Fresh searches usually take about 40 seconds |
 | Deploy | Railway-friendly, self-hostable, no paid services required in `NO_LLM_MODE=true` |
 
+## Why people star it
+
+- It solves a real problem most GitHub search flows do not: finding the right repo by capability,
+  not name or star count.
+- The ranking is explainable. Users can inspect the evidence instead of trusting a black box.
+- It has a live demo and a local-free mode, so people can try it quickly without a complicated
+  setup.
+- The project is useful to builders, maintainers, and people who review open source for a living.
+
 ## Why people use it
 
 - Search by function, not by keyword luck.
@@ -47,8 +61,6 @@ It is built for two audiences:
 - Keep the ranking formula auditable instead of opaque.
 
 ## How it works
-
-![RepoRadar core workflow diagram](./public/readme-workflow.png)
 
 | Stage | What happens | Output |
 |---|---|---|
@@ -166,6 +178,9 @@ pnpm dev
 
 Open [http://localhost:2000](http://localhost:2000) and search.
 
+If you want to judge the project before installing anything, start with the live demo above and try a
+few searches such as `browser testing`, `notion editor`, or `simple react state`.
+
 ## Configuration
 
 Important environment variables:
@@ -188,6 +203,7 @@ If you want the default progress estimate to match the current UI, keep `SEARCH_
 - [Setup guide](./setup.txt)
 - [Project status](./PROGRESS.md)
 - [Architecture and product spec](./REPORADAR.md)
+- [Changelog](./CHANGELOG.md)
 
 README visual assets are generated with Python and Pillow:
 
@@ -206,9 +222,11 @@ RepoRadar gets stronger when people can understand and trust it quickly.
 
 ## Why star this
 
-If you believe open source should win on merit, evidence, and usefulness rather than on marketing
-and keyword games, star RepoRadar. That support helps the project reach more builders and more
-maintainers who want their work discovered for the right reasons.
+If RepoRadar saves you time, star it so more builders and maintainers can find a tool that ranks
+repos by usefulness instead of popularity. Stars also help the project reach people who are tired
+of keyword-only search and want evidence they can trust.
+
+If you want to help without much effort, one star and one share are the most effective signals.
 
 ## License
 

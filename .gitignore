@@ -38,14 +38,18 @@ yarn-error.log*
 devlog.txt
 dev-*.txt
 prod-*.txt
-/logs/*.log
-/logs/*.jsonl
+/logs/
 
 # vercel
 .vercel
 
 # hyperframes (video production workspace — not part of the app)
 /hyperframes
+
+# local agent/editor state
+/.claude/
+AGENTS.md
+agents.md
 
 # typescript
 *.tsbuildinfo

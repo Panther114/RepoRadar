@@ -20,6 +20,12 @@ Open `http://localhost:2000`.
 
 For free local testing, keep `NO_LLM_MODE=true`. For AI scoring, set `OPENROUTER_API_KEY` and `NO_LLM_MODE=false`.
 
+## Local-only files
+
+The repository ignores generated and machine-local artifacts such as `.next/`, `node_modules/`,
+`logs/`, `hyperframes/`, and `.claude/`. Do not commit those files unless you are intentionally
+changing the ignore policy or adding a tracked asset.
+
 ## Before opening a pull request
 
 ```bash

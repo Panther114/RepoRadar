@@ -1,9 +1,0 @@
-{
-  "permissions": {
-    "allow": [
-      "Bash(Get-ChildItem -Path \"D:\\\\RepoRadar\" -Recurse)",
-      "Bash(Select-Object -Property FullName)",
-      "Bash(Sort-Object FullName)"
-    ]
-  }
-}
