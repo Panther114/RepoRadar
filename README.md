@@ -69,15 +69,16 @@ rather than popularity alone.
 | Stage | What happens | Why it matters |
 |---|---|---|
 | Intent | Parses the user's plain-English need into search constraints | Short prompts become structured searches |
-| GitHub search | Runs multiple query variants against GitHub (optional `sort:stars`/`sort:updated` re-issues, RRF-fused) | Improves recall beyond one keyword phrase |
+| GitHub search | Runs multiple query variants, including `sort:stars`/`sort:updated` re-issues, RRF-fused | Canonical high-star and freshly-active repos reliably enter the pool |
 | Candidate cache | Reuses fresh candidate pools when possible | Keeps repeated searches faster and cheaper |
 | Vector funnel | Local embeddings (conjunctive per-aspect) + a credibility floor narrow the pool | Drops weak matches and keyword-stuffed 0-signal repos before expensive enrichment |
+| Cross-encoder rerank | A local (query, repo)-pair model reranks the shortlist, paired with a prominence co-signal | Sharper relevance without burying canonical projects under keyword-similar demos |
 | Enrichment | Fetches README, manifests, releases, issues, PRs, contributors, and metadata | Scores are grounded in observable evidence |
 | Scoring | One listwise pass ranks survivors and flags off-topic repos; produces Fit, Future, Underrated, and risk signals | Results are ranked for actual usefulness, and irrelevant repos are demoted instead of padding the shortlist |
 
-> v1.1.3 adds an opt-in retrieval toolbox (sort-variant recall, HyDE, a local cross-encoder reranker)
-> and a labeled-gold-set eval harness. Each feature ships **off by default** with its measured A/B
-> tradeoff documented in `.env.example` — enable and re-measure for your corpus. See `PLAN.md`.
+> v1.1.3 adds sort-variant recall and a local cross-encoder reranker (both **on by default** — together
+> +0.044 nDCG / +0.064 recall and half the trap-leak on the gold set), plus a labeled eval harness and an
+> opt-in toolbox (HyDE, hybrid BM25, topic expansion, MMR) documented in `.env.example`. See `PLAN.md`.
 
 ## What You Get On Screen
 

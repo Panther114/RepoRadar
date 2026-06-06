@@ -470,6 +470,25 @@ down-migration. The branch keeps a clean checkpoint commit before each phase for
    deltas; trustworthy A/B needs frozen pools/seeds and ≥3 repeats. This harness is the prerequisite for any
    future, confident search change.
 
+### Follow-up — prominence fix + two features promoted to default-ON
+The "bury qdrant" failure had a clear root cause: `credibilityScore` deliberately saturates by ~500★ (to
+protect hidden gems), so it could not separate a 149★ demo from a 31k★ canonical project, leaving the
+cross-encoder's surface-text score to decide. Fix: a **non-saturating `prominenceScore`** (log10(stars)/5)
+used ONLY in the cross-encoder blend (`0.60·CE + 0.20·prominence + 0.12·credibility + 0.08·recency`), and
+keep `GITHUB_PER_PAGE=20` (sort-variants already supply recall; bigger pools flood distractors).
+
+- **Smoke (the prior failure case fixed):** vector-db → milvus #1, qdrant #2, weaviate #3, lancedb #4;
+  rust → actix/warp/**rwf2/Rocket**(25k★, was missing)/salvo/poem; kubernetes → clean and rich.
+- **`{sort-variants + cross-encoder(prominence), per_page=20}` vs baseline (REPEATS=2):**
+  **nDCG 0.665→0.709 (+0.044), Recall@15 0.557→0.621 (+0.064), PoolRecall +0.019, TrapLeak 0.31→0.13,
+  latency p50 52→42s.** Per-prompt: rust +0.20, vector-db +0.14, firebase +0.11, local-first +0.08,
+  kubernetes +0.07; minor losses react −0.14 (variance draw), python −0.07. MRR −0.066 and a small junk
+  uptick are the only soft spots — acceptable for the recall+relevance gains.
+- **DECISION (final): `SEARCH_SORT_VARIANTS` and `CROSS_ENCODER_RERANK` ship default-ON.** `GITHUB_PER_PAGE`
+  stays 20; `HYDE` and the net-negative `HYBRID_FUNNEL`/`GRAPH_TOPICS`/`MMR_DIVERSIFY` stay default-off.
+- **Lesson reinforced:** the cross-encoder only became safe once paired with an authority co-signal — a
+  reranker that scores text relevance alone will trade away exactly the proven projects users want.
+
 ---
 
 ### Appendix — quick commands

@@ -63,6 +63,20 @@ function credibilityScore(stars: number, forks: number, includeSmall: boolean): 
   return clamp01(Math.log10(Math.max(stars, 0) + 2 * Math.max(forks, 0) + 1) / 2.2);
 }
 
+/**
+ * Authority/prominence prior, used ONLY in the cross-encoder blend. Unlike
+ * `credibilityScore` (which saturates by ~500★ to protect hidden gems), this is
+ * a NON-saturating log term that still separates a 149★ demo (~0.44) from a
+ * 31k★ canonical project (~0.90). The cross-encoder rewards surface text and
+ * will otherwise rank a keyword-perfect demo above the real project; this is the
+ * authority co-signal that prevents that burying. Neutral when the user
+ * explicitly wants small/underrated repos.
+ */
+function prominenceScore(stars: number, includeSmall: boolean): number {
+  if (includeSmall) return 0.8;
+  return clamp01(Math.log10(Math.max(stars, 0) + 1) / 5);
+}
+
 function candidateText(c: Candidate, light?: LightRepoEvidence): string {
   return [
     c.fullName,
@@ -228,8 +242,11 @@ export async function narrowCandidates(
   // independent embeddings; a cross-encoder reads the (query, repo) pair jointly
   // for far sharper relevance. We rerank only a shortlist (≈3×topN) of the
   // funnel's best — cheap, and enough to pull canonical answers the widened pool
-  // out-ranked (qdrant/weaviate) back to the top. The credibility floor is
-  // retained so the cross-encoder can't resurrect 0-signal keyword matches.
+  // out-ranked back to the top. The blend keeps the cross-encoder dominant for
+  // relevance, but pairs it with a non-saturating prominence term (the authority
+  // co-signal) plus the credibility floor — so it cannot bury a 31k★ canonical
+  // project (qdrant) under a keyword-perfect 149★ demo, nor resurrect 0-signal
+  // keyword matches.
   if (crossEncoderEnabled() && entries.length > topN) {
     const shortlistN = Math.min(Math.max(3 * topN, topN + 5), entries.length);
     const shortlist = entries.slice(0, shortlistN);
@@ -241,9 +258,10 @@ export async function narrowCandidates(
       );
       shortlist.forEach((e, i) => {
         e.prefilterScore = clamp01(
-          0.74 * ceScores[i] +
-            0.10 * recencyScore(e.candidate.pushedAt, c.pushedWithinDays) +
-            0.16 * credibilityScore(e.candidate.stars, e.candidate.forks, c.includeSmallProjects),
+          0.60 * ceScores[i] +
+            0.20 * prominenceScore(e.candidate.stars, c.includeSmallProjects) +
+            0.12 * credibilityScore(e.candidate.stars, e.candidate.forks, c.includeSmallProjects) +
+            0.08 * recencyScore(e.candidate.pushedAt, c.pushedWithinDays),
         );
       });
       shortlist.sort((a, b) => b.prefilterScore - a.prefilterScore);
