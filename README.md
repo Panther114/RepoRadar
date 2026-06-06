@@ -69,11 +69,15 @@ rather than popularity alone.
 | Stage | What happens | Why it matters |
 |---|---|---|
 | Intent | Parses the user's plain-English need into search constraints | Short prompts become structured searches |
-| GitHub search | Runs multiple query variants against GitHub | Improves recall beyond one keyword phrase |
+| GitHub search | Runs multiple query variants against GitHub (optional `sort:stars`/`sort:updated` re-issues, RRF-fused) | Improves recall beyond one keyword phrase |
 | Candidate cache | Reuses fresh candidate pools when possible | Keeps repeated searches faster and cheaper |
-| Vector funnel | Uses local embeddings (conjunctive per-aspect) plus a credibility floor to narrow the pool | Drops weak matches and keyword-stuffed 0-signal repos before expensive enrichment |
+| Vector funnel | Local embeddings (conjunctive per-aspect) + a credibility floor narrow the pool | Drops weak matches and keyword-stuffed 0-signal repos before expensive enrichment |
 | Enrichment | Fetches README, manifests, releases, issues, PRs, contributors, and metadata | Scores are grounded in observable evidence |
 | Scoring | One listwise pass ranks survivors and flags off-topic repos; produces Fit, Future, Underrated, and risk signals | Results are ranked for actual usefulness, and irrelevant repos are demoted instead of padding the shortlist |
+
+> v1.1.3 adds an opt-in retrieval toolbox (sort-variant recall, HyDE, a local cross-encoder reranker)
+> and a labeled-gold-set eval harness. Each feature ships **off by default** with its measured A/B
+> tradeoff documented in `.env.example` — enable and re-measure for your corpus. See `PLAN.md`.
 
 ## What You Get On Screen
 
@@ -148,10 +152,29 @@ Important environment variables:
 | `LISTWISE_TIMEOUT_MS` | Timeout for listwise ranking |
 | `SEARCH_ETA_SECONDS` | Progress-bar estimate, currently calibrated around `67` |
 | `SEARCH_DEBUG` | When `true`, writes per-candidate funnel/ranking traces to `logs/search-debug.jsonl` (local tuning only) |
+| `GITHUB_PER_PAGE` | Results fetched per GitHub query (recall lever; default `40`) |
+| `SEARCH_SORT_VARIANTS` | Re-issue top queries under `sort:stars`/`sort:updated` and RRF-fuse (recall) |
+| `HYDE` | Embed an LLM-written "ideal repo" description alongside the query (recall) |
+| `CROSS_ENCODER_RERANK` | Local cross-encoder reranks the funnel shortlist (precision) |
+| `RERANK_MODEL` | Cross-encoder model id (default `Xenova/ms-marco-MiniLM-L-6-v2`) |
 
 ## Search Quality Diagnostics
 
-RepoRadar includes a short manual benchmark for search quality:
+RepoRadar ships a labeled-gold-set evaluation harness for measuring search quality changes:
+
+```bash
+# Run the gold set, compute metrics, save a tagged report under logs/eval/
+EVAL_TAG=baseline EVAL_REPEATS=2 node scripts/eval/run-eval.mjs
+# Diff two runs (control vs candidate)
+node scripts/eval/report.mjs baseline candidate
+```
+
+It reports nDCG@10, Recall@15, pool recall, MRR, trap-leak, junk rate, and latency over a field-diverse
+prompt set (`scripts/eval/gold.json`). Use it to A/B any ranking change. Note: GitHub returns different
+pools across calls and temperature-0 intent still varies via provider routing, so trust the **median of
+≥3 repeats** and treat sub-0.03 nDCG deltas as noise.
+
+There is also a shorter manual benchmark:
 
 ```bash
 node scripts/search-benchmark.mjs --limit 6

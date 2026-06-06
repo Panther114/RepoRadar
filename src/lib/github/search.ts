@@ -85,10 +85,11 @@ export async function searchCandidatesDetailed(
   _constraints: Constraints,
   options: SearchOptions = {},
 ): Promise<CandidateSearchResult> {
-  // 20 results per query keeps the ONNX embedding batch at a safe size.
-  // Breadth comes from 6 DIVERSE query strategies (topic:, OR, in:readme, etc.)
-  // not from more results per query. 6×20 = up to 120 raw, ~60-80 after dedup.
-  const perQuery = options.perQuery ?? 20;
+  // per_page controls raw yield per query. GitHub allows up to 100 at the same
+  // API-call cost as 20, so a larger value is a near-free recall lever (the pool
+  // is the recall ceiling — no ranker can recover a repo that never enters it).
+  // GITHUB_PER_PAGE is the knob; the ONNX funnel batches all survivors anyway.
+  const perQuery = options.perQuery ?? Math.min(Math.max(Number(process.env.GITHUB_PER_PAGE) || 20, 10), 100);
   const maxPool = options.maxPool ?? 80;
   const maxQueries = options.maxQueries ?? Math.min(Math.max(Number(process.env.MAX_SEARCH_QUERIES) || 6, 4), 8);
 
@@ -101,14 +102,32 @@ export async function searchCandidatesDetailed(
   const sources: CandidateSource[] = [];
   const perQueryResults: SearchQueryDiagnostic[] = [];
 
+  // Sort-diversified retrieval (B2): GitHub's default "best match" relevance can
+  // bury a canonical high-star repo below keyword-stuffed noise. Re-issuing the
+  // 2 highest-signal queries under sort:stars and sort:updated and fusing via RRF
+  // pulls the proven and the freshly-active repos into the pool. Flag-gated.
+  type Task = { query: string; sort?: "stars" | "updated" };
+  const tasks: Task[] = activeQueries.map((q) => ({ query: q }));
+  if (String(process.env.SEARCH_SORT_VARIANTS ?? "").toLowerCase() === "true") {
+    for (const q of activeQueries.slice(0, 2)) {
+      tasks.push({ query: q, sort: "stars" });
+      tasks.push({ query: q, sort: "updated" });
+    }
+  }
+
   // Fire the variants concurrently — each is an independent search.
   const results = await Promise.allSettled(
-    activeQueries.map((q) => octokit.rest.search.repos({ q, per_page: perQuery })),
+    tasks.map((t) =>
+      octokit.rest.search.repos(
+        t.sort ? { q: t.query, per_page: perQuery, sort: t.sort, order: "desc" } : { q: t.query, per_page: perQuery },
+      ),
+    ),
   );
 
   for (let i = 0; i < results.length; i++) {
     const result = results[i];
-    const query = activeQueries[i];
+    const task = tasks[i];
+    const query = task.sort ? `${task.query} [sort:${task.sort}]` : task.query;
     if (result.status === "rejected") {
       console.error("[github] search query failed:", result.reason);
       perQueryResults.push({ query, total: 0, repos: [] });
