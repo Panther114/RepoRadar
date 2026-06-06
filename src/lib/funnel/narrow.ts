@@ -1,7 +1,17 @@
 import { embedBatch, cosineSimilarity } from "@/lib/embeddings/embedder";
 import { clamp01 } from "@/lib/scoring/rubric";
 import { debugTrace, searchDebugEnabled } from "@/lib/pipeline/debugTrace";
+import { bm25Scores } from "@/lib/search/lexical";
+import { crossEncoderEnabled, crossEncoderScores } from "@/lib/funnel/rerank";
 import type { Candidate, Constraints, Intent, LightRepoEvidence } from "@/lib/types";
+
+/** 1-based dense rank for each index (1 = highest score). Ties broken by index. */
+function rankIndices(scores: number[]): number[] {
+  const order = scores.map((s, i) => ({ s, i })).sort((a, b) => b.s - a.s);
+  const rank = new Array<number>(scores.length);
+  order.forEach((o, pos) => { rank[o.i] = pos + 1; });
+  return rank;
+}
 
 export interface FunnelEntry {
   candidate: Candidate;
@@ -117,6 +127,7 @@ export async function narrowCandidates(
   lightEvidence?: Map<number, LightRepoEvidence>,
   rescuedNames: string[] = [],
   debugContext?: { searchQueryId: string },
+  hydeDoc?: string | null,
 ): Promise<FunnelResult> {
   const c = intent.constraints;
   const candTexts = candidates.map((candidate) => candidateText(candidate, lightEvidence?.get(candidate.githubId)));
@@ -130,51 +141,80 @@ export async function narrowCandidates(
 
   // Layout of the batched embedding call:
   //   [0]                    = whole-prompt intent vector
-  //   [1 .. 1+A)             = one vector per aspect
-  //   [1+A .. end)           = one vector per candidate
+  //   [1]                    = HyDE hypothetical-doc vector (optional)
+  //   [2 .. 2+A)             = one vector per aspect
+  //   [2+A .. end)           = one vector per candidate
   const wholeIntentText = intent.normalizedPrompt + ". " + intentText(intent);
-  const allTexts = [wholeIntentText, ...aspects, ...candTexts];
+  const hyde = hydeDoc?.trim() || null;
+  const allTexts = [wholeIntentText, hyde ?? "", ...aspects, ...candTexts];
   const embeddings = await embedBatch(allTexts);
 
-  const intentEmbedding = embeddings[0];
-  const aspectEmbeddings = embeddings.slice(1, 1 + aspects.length);
-  const candEmbeddings = embeddings.slice(1 + aspects.length);
+  // HyDE: shift the whole-prompt query vector toward repo-vocabulary space by
+  // averaging it with the hypothetical-doc vector. cosineSimilarity normalises,
+  // so a plain average is a valid midpoint query representation.
+  const promptEmbedding = embeddings[0];
+  const hydeEmbedding = embeddings[1];
+  const intentEmbedding =
+    hyde
+      ? promptEmbedding.map((v, i) => (v + hydeEmbedding[i]) / 2)
+      : promptEmbedding;
+  const aspectEmbeddings = embeddings.slice(2, 2 + aspects.length);
+  const candEmbeddings = embeddings.slice(2 + aspects.length);
 
-  const debugRows: Record<string, unknown>[] = [];
-  const entries: FunnelEntry[] = candidates.map((candidate, i) => {
+  // Pass 1: dense semantic similarity per candidate.
+  const sims = candidates.map((_candidate, i) => {
     const candEmb = candEmbeddings[i];
     const wholeSim = clamp01((cosineSimilarity(intentEmbedding, candEmb) + 1) / 2);
-
     let similarity: number;
     let aspectSims: number[] = [];
     if (useAspects) {
-      aspectSims = aspectEmbeddings.map((ae) =>
-        clamp01((cosineSimilarity(ae, candEmb) + 1) / 2),
-      );
-      // Blend: the conjunctive aspect match dominates (relevance), with the
-      // whole-prompt vector as a smoothing prior so phrasing nuances still count.
+      aspectSims = aspectEmbeddings.map((ae) => clamp01((cosineSimilarity(ae, candEmb) + 1) / 2));
       similarity = clamp01(0.7 * conjunctiveSim(aspectSims) + 0.3 * wholeSim);
     } else {
       similarity = wholeSim;
     }
+    return { similarity, aspectSims, wholeSim };
+  });
+
+  // Hybrid retrieval (R1): fuse the dense ranking with a local BM25 lexical
+  // ranking via Reciprocal Rank Fusion (k=60, score-agnostic). This restores
+  // exact rare-term precision (library names) the embedding band compresses
+  // away, without hurting semantic matches. Flag-gated; off = pure dense.
+  const hybrid = String(process.env.HYBRID_FUNNEL ?? "").toLowerCase() === "true";
+  const relevance = sims.map((s) => s.similarity);
+  if (hybrid) {
+    const queryTerms = [intent.normalizedPrompt, ...c.keywords, ...aspects];
+    const bm25 = bm25Scores(candidates, queryTerms, lightEvidence);
+    const denseRank = rankIndices(candidates.map((_, i) => sims[i].similarity));
+    const lexRank = rankIndices(candidates.map((cand) => bm25.get(cand.githubId) ?? 0));
+    const RRF_K = 60;
+    const rrf = candidates.map((_, i) => 1 / (RRF_K + denseRank[i]) + 1 / (RRF_K + lexRank[i]));
+    const maxRrf = Math.max(...rrf, 1e-9);
+    for (let i = 0; i < candidates.length; i++) relevance[i] = clamp01(rrf[i] / maxRrf);
+  }
+
+  const debugRows: Record<string, unknown>[] = [];
+  const entries: FunnelEntry[] = candidates.map((candidate, i) => {
+    const similarity = sims[i].similarity;
 
     if (searchDebugEnabled()) {
       debugRows.push({
         repo: candidate.fullName,
         stars: candidate.stars,
-        wholeSim: Number(wholeSim.toFixed(4)),
-        aspectSims: aspectSims.map((s) => Number(s.toFixed(4))),
-        worstAspect: aspectSims.length ? Number(Math.min(...aspectSims).toFixed(4)) : null,
+        wholeSim: Number(sims[i].wholeSim.toFixed(4)),
+        aspectSims: sims[i].aspectSims.map((s) => Number(s.toFixed(4))),
+        worstAspect: sims[i].aspectSims.length ? Number(Math.min(...sims[i].aspectSims).toFixed(4)) : null,
         similarity: Number(similarity.toFixed(4)),
+        relevance: Number(relevance[i].toFixed(4)),
       });
     }
 
     const prefilterScore = clamp01(
-      // Semantic similarity is the strongest relevance gate; keep stars bias low
-      // so popular-but-irrelevant repos don't crowd out closer matches. The
-      // credibility term is the floor that keeps 0-star keyword-stuffed names
-      // out of the shortlist without penalising genuine small/hidden-gem repos.
-      0.68 * similarity +
+      // The relevance term (dense, or dense+lexical RRF when hybrid) is the
+      // strongest gate; keep stars bias low so popular-but-irrelevant repos don't
+      // crowd out closer matches. The credibility term is the floor that keeps
+      // 0-star keyword-stuffed names out without penalising hidden-gem repos.
+      0.68 * relevance[i] +
         0.10 * recencyScore(candidate.pushedAt, c.pushedWithinDays) +
         0.06 * licenseScore(candidate.licenseSpdx, c.licenses) +
         0.16 * credibilityScore(candidate.stars, candidate.forks, c.includeSmallProjects),
@@ -184,7 +224,63 @@ export async function narrowCandidates(
 
   entries.sort((a, b) => b.prefilterScore - a.prefilterScore);
 
-  const selected = entries.slice(0, topN);
+  // Cross-encoder rerank (R3): the bi-encoder funnel ranks query and repo by
+  // independent embeddings; a cross-encoder reads the (query, repo) pair jointly
+  // for far sharper relevance. We rerank only a shortlist (≈3×topN) of the
+  // funnel's best — cheap, and enough to pull canonical answers the widened pool
+  // out-ranked (qdrant/weaviate) back to the top. The credibility floor is
+  // retained so the cross-encoder can't resurrect 0-signal keyword matches.
+  if (crossEncoderEnabled() && entries.length > topN) {
+    const shortlistN = Math.min(Math.max(3 * topN, topN + 5), entries.length);
+    const shortlist = entries.slice(0, shortlistN);
+    const textByName = new Map(candidates.map((cand, i) => [cand.fullName, candTexts[i]]));
+    try {
+      const ceScores = await crossEncoderScores(
+        intent.normalizedPrompt,
+        shortlist.map((e) => textByName.get(e.candidate.fullName) ?? e.candidate.fullName),
+      );
+      shortlist.forEach((e, i) => {
+        e.prefilterScore = clamp01(
+          0.74 * ceScores[i] +
+            0.10 * recencyScore(e.candidate.pushedAt, c.pushedWithinDays) +
+            0.16 * credibilityScore(e.candidate.stars, e.candidate.forks, c.includeSmallProjects),
+        );
+      });
+      shortlist.sort((a, b) => b.prefilterScore - a.prefilterScore);
+      entries.splice(0, shortlistN, ...shortlist);
+    } catch {
+      /* reranker unavailable → keep bi-encoder order */
+    }
+  }
+
+  // MMR diversification (R4): greedily build the survivor set trading relevance
+  // (prefilterScore) against novelty (1 − max cosine to already-selected), so the
+  // shortlist isn't 15 near-identical forks of one project. λ keeps relevance
+  // dominant. Flag-gated; off = plain top-N by prefilter.
+  let selected: FunnelEntry[];
+  if (String(process.env.MMR_DIVERSIFY ?? "").toLowerCase() === "true" && entries.length > topN) {
+    const embByName = new Map(candidates.map((cand, i) => [cand.fullName, candEmbeddings[i]]));
+    const lambda = Number(process.env.MMR_LAMBDA) || 0.7;
+    const pool = [...entries];
+    selected = [pool.shift()!];
+    while (selected.length < topN && pool.length > 0) {
+      let bestIdx = 0;
+      let bestScore = -Infinity;
+      for (let i = 0; i < pool.length; i++) {
+        const emb = embByName.get(pool[i].candidate.fullName)!;
+        let maxSim = 0;
+        for (const s of selected) {
+          const sEmb = embByName.get(s.candidate.fullName)!;
+          maxSim = Math.max(maxSim, clamp01((cosineSimilarity(emb, sEmb) + 1) / 2));
+        }
+        const mmr = lambda * pool[i].prefilterScore - (1 - lambda) * maxSim;
+        if (mmr > bestScore) { bestScore = mmr; bestIdx = i; }
+      }
+      selected.push(pool.splice(bestIdx, 1)[0]);
+    }
+  } else {
+    selected = entries.slice(0, topN);
+  }
   const selectedNames = new Set(selected.map((entry) => entry.candidate.fullName.toLowerCase()));
   const rescued = new Set(
     rescuedNames

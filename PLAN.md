@@ -407,9 +407,68 @@ down-migration. The branch keeps a clean checkpoint commit before each phase for
 
 > One line per phase outcome — the running record of what the numbers said.
 
-- _(Phase 0)_ …
-- _(Phase 1)_ …
-- _(Phase 2)_ …
+- **Phase 0 — harness + baseline:** built `scripts/eval/{gold.json,run-eval.mjs,metrics.mjs,report.mjs}`
+  (8 prompts × 2 repeats; metrics Recall@15, nDCG@10, PoolRecall, MRR, TrapLeak, Junk, latency).
+  **Baseline v1.1.2:** nDCG@10 **0.665**, Recall@15 **0.557**, PoolRecall **0.839**, MRR 0.896,
+  TrapLeak 0.31, Junk 0.31, latency p50 52s (TTL=0 forces fresh search). Captured.
+- **All-features-on (smoke):** REGRESSED rust — latency 98s (over budget) + benchmark/name-collision
+  noise (webframework-bench, NVIDIA/warp) crowding out actix/poem/salvo. → ablate.
+- **Topic expansion (`GRAPH_TOPICS`) — REVERT:** pulls "benchmark"/"comparison" meta-repos into the pool
+  (topic:web-framework matches them) and adds ~3 searches of latency. Net noise.
+- **MMR (`MMR_DIVERSIFY`) — REVERT:** λ=0.7 promotes diverse-but-irrelevant repos (NVIDIA/warp) over
+  canonical ones; displaces relevant results. Diversity not worth the precision loss on these queries.
+- **Hybrid BM25 funnel (`HYBRID_FUNNEL`) — REVERT:** lexical signal rewards keyword-stuffed names —
+  "rust-web-framework-comparison", "*-benchmark" repos surge; salvo/poem dropped. With it OFF salvo
+  returns to #2. (A *cross-encoder* reranker — semantic, not lexical — is the right precision tool here;
+  see deferred R3.)
+- **Lean config `{per_page=40, sort-variants, HyDE}` vs baseline — KEEP:** nDCG **0.665→0.715**
+  (+0.050), PoolRecall 0.839→**0.890**, MRR →**1.000**, **Junk 0.31→0.00**, TrapLeak 0.31→0.19.
+  Kubernetes +0.50 and far more stable. Cost: p95 latency 63→79s (sort variants add searches).
+- **HyDE ablation (`lean` vs `leanNoHyde`):** removing HyDE regressed every quality metric, BUT this was
+  **confounded by GitHub pool variance** — PoolRecall dropped 0.890→0.784 even though HyDE cannot affect
+  the pool (it only shifts the funnel query vector). ⇒ **TTL=0 fresh searches have high pool variance;
+  2 repeats can't isolate ranking features from pool noise.** Methodology corrected: freeze pools (cache).
+- **Cross-encoder rerank (R3) — KEEP:** `Xenova/ms-marco-MiniLM-L-6-v2` (~90 MB, local/free). Clean
+  relevance separation (relevant logit +7.3 vs irrelevant −11.4 — far better than MiniLM's compressed
+  0.6–0.8 band). Frozen-ish A/B (still partly confounded by LLM query non-determinism shifting cache
+  keys): targeted wins exactly where the widened pool buried canonical answers — **vector-db +0.15**
+  (qdrant/weaviate recovered), **rust +0.20**, **firebase +0.21**, TrapLeak 0.25→0.13; latency +4s p50.
+- **Hybrid BM25 / topics / MMR — REVERTED** (see above; net noise or harm).
+- **Methodology finding (important):** search A/B at this scale is dominated by two noise sources —
+  (1) GitHub returns different pools for the same query across calls; (2) temperature-0 LLM intent still
+  varies via provider routing, changing query strings → different cached pools. Reliable attribution
+  needs frozen seeds/pools AND ≥3 repeats; small (<0.03 nDCG) deltas here are not trustworthy.
+- **Confirmation eval `{per_page=40, sort, HyDE, cross-encoder}` vs baseline (REPEATS=3):** robust wins —
+  **TrapLeak 0.31→0.13 (−58%)**, **Junk 0.31→0.17**, AllRelevant +0.02, latency p50 52→40s, and big
+  per-prompt gains (rust +0.16, kubernetes +0.20, firebase +0.15). BUT aggregate **nDCG flat (−0.008)**
+  and MRR −0.12 — one bad react pool-draw (0.17) dragged the mean; variance, not a systematic regression.
+- **CE-without-HyDE smoke (final-config check) — REGRESSION:** vector-db canonical DBs (qdrant #8,
+  milvus #10, weaviate #11) got buried under tiny text-similar demos (duckdb-embedding-search 149★,
+  fut=0, at #1). The cross-encoder over-weights surface text; its earlier vector-db win was entangled
+  with HyDE. Reproducible, not noise. ⇒ cross-encoder is NOT a safe default.
+- **FINAL DECISION — ship all features OPT-IN (default OFF); v1.1.3 default == v1.1.2.** Honest reading of
+  "keep-only-if-it-helps": no feature was a robust enough *aggregate* win to default-on without risking a
+  regression somewhere (CE buries vector-db; breadth alone trades kubernetes-recall for vector-db-precision;
+  HyDE ambiguous; hybrid/topics/MMR net-negative). What ships as real value:
+    1. the **eval harness** (gold set + metrics + report) — lasting infrastructure;
+    2. a documented **retrieval toolbox** (per_page, sort-variants, HyDE, cross-encoder, + 3 reverted) each
+       flag-gated with its measured tradeoff, enable-and-re-measure-per-corpus;
+    3. the **findings** below.
+
+### Findings (first-principles)
+1. **The v1.1.2 baseline is already strong** (the listwise-reliability fix was the dominant lever); further
+   aggregate gains are small and hard-won.
+2. **Breadth ⟂ precision tradeoff:** enlarging the pool (per_page, sort, topics) lifts recall on
+   under-covered queries (kubernetes) but buries the few canonical answers on queries with many
+   similar-but-lesser repos (vector-db). No tested reranker resolved both at once.
+3. **Cross-encoders reward surface text:** great for "is this on-topic" (cuts traps) but they can rank a
+   keyword-perfect 0-star demo above the canonical 30k-star project. Needs a credibility/authority co-signal
+   (future work: blend CE with stars/PageRank, or use CE to *filter* not *reorder*).
+4. **Lexical (BM25) fusion backfires on meta-repos:** "awesome-*", "*-benchmark", "*-comparison" names are
+   keyword-perfect but useless as answers.
+5. **Measurement is the bottleneck:** GitHub pool variance + temp-0 LLM query drift swamp sub-0.03 nDCG
+   deltas; trustworthy A/B needs frozen pools/seeds and ≥3 repeats. This harness is the prerequisite for any
+   future, confident search change.
 
 ---
 

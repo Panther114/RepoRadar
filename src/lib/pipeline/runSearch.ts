@@ -25,6 +25,8 @@ import {
 import { analysisInputHash, hashJson, sha256 } from "@/lib/cache/keys";
 import { createLogger } from "@/lib/logger";
 import { findGuidanceHints } from "@/lib/search/guidance";
+import { generateHydeDoc } from "@/lib/search/hyde";
+import { expandByTopics } from "@/lib/search/graphExpand";
 import { writeSearchDiagnostics } from "@/lib/pipeline/diagnostics";
 import { debugTrace, searchDebugEnabled } from "@/lib/pipeline/debugTrace";
 import type { Analysis, Candidate, Intent, RepoEvidence, SearchDiagnostics, SearchFilters } from "@/lib/types";
@@ -299,6 +301,31 @@ export async function runSearch(
       return;
     }
 
+    // HyDE (B4): start the hypothetical-doc generation now so it overlaps with
+    // light enrichment below; resolved just before the funnel. No-op unless
+    // HYDE=true and the LLM is enabled.
+    const hydePromise = generateHydeDoc(prompt).catch(() => null);
+
+    // Graph expansion via topics (B3a): broaden the pool with topic-neighbours of
+    // the strongest candidates before the funnel narrows. No-op unless GRAPH_TOPICS=true.
+    try {
+      const expansion = await expandByTopics(candidates);
+      if (expansion.candidates.length) {
+        const seen = new Set(candidates.map((cand) => cand.githubId));
+        let added = 0;
+        for (const cand of expansion.candidates) {
+          if (seen.has(cand.githubId)) continue;
+          if (candidates.length >= env.MAX_CANDIDATES) break;
+          candidates.push(cand);
+          seen.add(cand.githubId);
+          added++;
+        }
+        if (added) searchLog.info("Topic graph expansion added candidates", { added, topicQueries: expansion.topicQueries });
+      }
+    } catch (err) {
+      searchLog.warn("Topic graph expansion failed (non-fatal)", err);
+    }
+
     // ── Stage 3: Funnel / narrowing ───────────────────────────────────────────
     await setJob(searchQueryId, { stage: "funnel", progress: 35 });
     const lightEvidence = await fetchLightRepoEvidenceBatch(
@@ -312,6 +339,8 @@ export async function runSearch(
       candidates: candidates.length,
       topN: env.FUNNEL_TOP_N,
     });
+    const hydeDoc = await hydePromise;
+    if (hydeDoc) searchLog.info("HyDE doc generated", { preview: hydeDoc.slice(0, 80) });
     let funnelResult: Awaited<ReturnType<typeof narrowCandidates>>;
     try {
       funnelResult = await narrowCandidates(
@@ -321,6 +350,7 @@ export async function runSearch(
         lightEvidence,
         intent.canonicalNames ?? [],
         { searchQueryId },
+        hydeDoc,
       );
       doneFunnel();
       searchLog.info("Funnel complete", { survivors: funnelResult.entries.length });

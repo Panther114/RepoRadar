@@ -1,0 +1,61 @@
+{
+  "_comment": "Gold set for RepoRadar search-quality evaluation (v1.1.3). fullNames are lowercased owner/repo. must_include = strong canonical answers; nice_to_have = legitimately good matches; traps = popular-but-irrelevant repos that must NOT appear in the top 15.",
+  "prompts": [
+    {
+      "prompt": "react data table",
+      "field": "frontend", "complexity": "short", "type": "capability",
+      "must_include": ["tanstack/table", "ag-grid/ag-grid", "glideapps/glide-data-grid"],
+      "nice_to_have": ["mui/mui-x", "tabulator-tables/tabulator", "kevinvandy/material-react-table", "comcast/react-data-grid"],
+      "traps": ["pmndrs/zustand", "reduxjs/redux", "pmndrs/jotai", "pmndrs/valtio"]
+    },
+    {
+      "prompt": "rust web framework",
+      "field": "systems", "complexity": "short", "type": "capability",
+      "must_include": ["tokio-rs/axum", "actix/actix-web", "seanmonstar/warp"],
+      "nice_to_have": ["salvo-rs/salvo", "poem-web/poem", "http-rs/tide", "rwf2/rocket"],
+      "traps": ["rust-unofficial/awesome-rust", "flosse/rust-web-framework-comparison"]
+    },
+    {
+      "prompt": "kubernetes monitoring and observability",
+      "field": "devops", "complexity": "medium", "type": "capability",
+      "must_include": ["prometheus-operator/kube-prometheus", "grafana/grafana", "open-telemetry/opentelemetry-collector"],
+      "nice_to_have": ["jaegertracing/jaeger", "victoriametrics/victoriametrics", "kubernetes/kube-state-metrics", "cilium/hubble"],
+      "traps": []
+    },
+    {
+      "prompt": "self hosted web analytics",
+      "field": "web", "complexity": "short", "type": "capability",
+      "must_include": ["plausible/analytics", "umami-software/umami", "matomo-org/matomo"],
+      "nice_to_have": ["milesmcc/shynet", "electerious/ackee", "openpanel-dev/openpanel"],
+      "traps": ["vercel/analytics"]
+    },
+    {
+      "prompt": "vector database for embeddings",
+      "field": "ml", "complexity": "short", "type": "capability",
+      "must_include": ["qdrant/qdrant", "milvus-io/milvus", "weaviate/weaviate"],
+      "nice_to_have": ["chroma-core/chroma", "pgvector/pgvector", "lancedb/lancedb"],
+      "traps": []
+    },
+    {
+      "prompt": "local first sync engine crdt",
+      "field": "data", "complexity": "medium", "type": "capability",
+      "must_include": ["yjs/yjs", "automerge/automerge"],
+      "nice_to_have": ["electric-sql/electric", "pubkey/rxdb", "loro-dev/loro", "tinybase/tinybase"],
+      "traps": []
+    },
+    {
+      "prompt": "open source alternative to firebase",
+      "field": "backend", "complexity": "medium", "type": "alternative",
+      "must_include": ["supabase/supabase", "appwrite/appwrite", "nhost/nhost"],
+      "nice_to_have": ["pocketbase/pocketbase", "parse-community/parse-server", "yugabyte/yugabyte-db"],
+      "traps": []
+    },
+    {
+      "prompt": "python data validation library",
+      "field": "python", "complexity": "short", "type": "capability",
+      "must_include": ["pydantic/pydantic"],
+      "nice_to_have": ["python-jsonschema/jsonschema", "keleshev/schema", "marshmallow-code/marshmallow", "pyeve/cerberus"],
+      "traps": ["psf/requests"]
+    }
+  ]
+}
