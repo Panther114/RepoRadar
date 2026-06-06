@@ -108,7 +108,7 @@ export async function searchCandidatesDetailed(
   // pulls the proven and the freshly-active repos into the pool. Flag-gated.
   type Task = { query: string; sort?: "stars" | "updated" };
   const tasks: Task[] = activeQueries.map((q) => ({ query: q }));
-  if (String(process.env.SEARCH_SORT_VARIANTS ?? "").toLowerCase() === "true") {
+  if (String(process.env.SEARCH_SORT_VARIANTS ?? "true").toLowerCase() === "true") {
     for (const q of activeQueries.slice(0, 2)) {
       tasks.push({ query: q, sort: "stars" });
       tasks.push({ query: q, sort: "updated" });

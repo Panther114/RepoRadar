@@ -28,11 +28,11 @@ function getModel() {
 }
 
 export function crossEncoderEnabled(): boolean {
-  // Default OFF (opt-in): measured precision gains on named/"alternative-to"
-  // queries (rust, firebase) but it can over-weight surface text and bury
-  // canonical high-value repos under tiny keyword-similar demos (vector-db).
-  // Enable per-corpus after checking the eval harness. Set CROSS_ENCODER_RERANK=true.
-  return String(process.env.CROSS_ENCODER_RERANK ?? "").toLowerCase() === "true";
+  // Default ON: paired with the prominence co-signal in the funnel blend (so it
+  // can't bury canonical high-star repos under keyword-similar demos), the
+  // cross-encoder is a net relevance win on the gold set (nDCG +0.044, trap-leak
+  // halved). Set CROSS_ENCODER_RERANK=false to disable (skips the ~90 MB model).
+  return String(process.env.CROSS_ENCODER_RERANK ?? "true").toLowerCase() === "true";
 }
 
 /**
