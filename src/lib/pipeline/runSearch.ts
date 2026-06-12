@@ -31,6 +31,7 @@ import { buildReferenceContext } from "@/lib/search/referenceResolver";
 import { mineAwesomeLists } from "@/lib/search/awesome";
 import { searchRegistries } from "@/lib/search/registries";
 import { fetchCandidatesByName } from "@/lib/github/fetchRepos";
+import { passesInjectionGate } from "@/lib/search/sourceGate";
 import { writeSearchDiagnostics } from "@/lib/pipeline/diagnostics";
 import { debugTrace, searchDebugEnabled } from "@/lib/pipeline/debugTrace";
 import type { Analysis, Candidate, Intent, RepoEvidence, SearchDiagnostics, SearchFilters } from "@/lib/types";
@@ -354,59 +355,31 @@ export async function runSearch(
       searchLog.warn("Topic graph expansion failed (non-fatal)", err);
     }
 
-    // Diverse sources (v1.1.4): awesome-list mining + package registries run in
-    // parallel and feed two things — extra candidates the GitHub keyword search
-    // missed, and a curated-membership set the funnel uses as a quality boost.
-    // Hard 10s budget: a slow registry can never stall the pipeline.
+    // Diverse sources (v1.1.4): awesome-list mining + package registries feed
+    // two things — extra candidates the GitHub keyword search missed, and a
+    // curated-membership set the funnel uses as a quality boost. Registries
+    // only fire for explicitly library-shaped queries (npm hits for an infra
+    // query like "kubernetes monitoring" are wrappers, not answers). The whole
+    // fetch runs CONCURRENTLY with light enrichment below and has a hard 10s
+    // budget — a slow registry can never stall the pipeline.
+    const REGISTRY_TYPES = new Set(["library", "framework", "cli", "plugin", "extension", "template"]);
     const curatedSet = new Set<string>();
-    try {
-      const doneSources = searchLog.time("diverse sources (awesome + registries)");
-      const sourcesPromise = Promise.all([
+    const sourcesPromise = Promise.race([
+      Promise.all([
         mineAwesomeLists(intent.constraints.keywords).catch(() => ({ curatedNames: [], lists: [] })),
-        searchRegistries(intent.constraints.keywords, intent.constraints.language).catch(() => []),
-      ]);
-      const timed = await Promise.race([
-        sourcesPromise,
-        new Promise<null>((resolve) => setTimeout(() => resolve(null), 10_000)),
-      ]);
-      if (timed) {
-        const [awesome, registryNames] = timed;
-        for (const name of awesome.curatedNames) curatedSet.add(name.toLowerCase());
-
+        REGISTRY_TYPES.has(intent.constraints.projectType)
+          ? searchRegistries(intent.constraints.keywords, intent.constraints.language).catch(() => [])
+          : Promise.resolve([]),
+      ]).then(async ([awesome, registryNames]) => {
         const inPool = new Set(candidates.map((cand) => cand.fullName.toLowerCase()));
-        const newNames = [
-          ...awesome.curatedNames.slice(0, 40),
-          ...registryNames,
-        ].filter((name) => !inPool.has(name.toLowerCase()));
-        if (newNames.length) {
-          const fetched = await fetchCandidatesByName(newNames.slice(0, 25));
-          // The pool is usually at MAX_CANDIDATES already; the RRF-fused tail is
-          // the weakest part, so curated/registry repos may displace it (capped,
-          // so GitHub-search results always keep the majority of the pool).
-          const maxNew = Math.min(fetched.length, Math.floor(env.MAX_CANDIDATES * 0.25));
-          const overflow = candidates.length + maxNew - env.MAX_CANDIDATES;
-          if (overflow > 0) candidates.splice(candidates.length - overflow, overflow);
-          let added = 0;
-          for (const cand of fetched) {
-            if (added >= maxNew || inPool.has(cand.fullName.toLowerCase())) continue;
-            candidates.push(cand);
-            inPool.add(cand.fullName.toLowerCase());
-            added++;
-          }
-          searchLog.info("Diverse sources merged", {
-            awesomeLists: awesome.lists,
-            curatedTotal: awesome.curatedNames.length,
-            registryHits: registryNames.length,
-            candidatesAdded: added,
-          });
-        }
-      } else {
-        searchLog.warn("Diverse sources timed out (10s) — continuing without them");
-      }
-      doneSources();
-    } catch (err) {
-      searchLog.warn("Diverse sources failed (non-fatal)", err);
-    }
+        const newNames = [...awesome.curatedNames.slice(0, 40), ...registryNames].filter(
+          (name) => !inPool.has(name.toLowerCase()),
+        );
+        const fetched = newNames.length ? await fetchCandidatesByName(newNames.slice(0, 25)) : [];
+        return { awesome, registryNames, fetched };
+      }),
+      new Promise<null>((resolve) => setTimeout(() => resolve(null), 10_000)),
+    ]).catch(() => null);
 
     // An "alternative to X" search must never return X itself.
     if (refContext?.excludeFullNames.length) {
@@ -429,6 +402,47 @@ export async function runSearch(
       searchLog.warn("Light enrichment failed; funnel will use metadata only", err);
       return undefined;
     });
+
+    // Merge the gated source candidates (fetched while light enrichment ran).
+    // Every injected repo must pass the topicality/traction/liveness gate, and
+    // displacement of the GitHub-search pool tail is capped at 10% so out-of-
+    // band sources can never crowd out organically-retrieved candidates (the
+    // ungated first cut cost 0.09 PoolRecall). Injected repos skip light
+    // enrichment — description+topics still embed fine in the funnel.
+    const sources = await sourcesPromise;
+    if (sources) {
+      for (const name of sources.awesome.curatedNames) curatedSet.add(name.toLowerCase());
+      const inPool = new Set(candidates.map((cand) => cand.fullName.toLowerCase()));
+      const excluded = new Set(refContext?.excludeFullNames ?? []);
+      const gated = sources.fetched.filter(
+        (cand) =>
+          !inPool.has(cand.fullName.toLowerCase()) &&
+          !excluded.has(cand.fullName.toLowerCase()) &&
+          passesInjectionGate(cand, intent.constraints.keywords, intent.constraints.includeSmallProjects),
+      );
+      const maxNew = Math.min(gated.length, 12);
+      const maxEvict = Math.floor(env.MAX_CANDIDATES * 0.1);
+      const spare = Math.max(0, env.MAX_CANDIDATES - candidates.length);
+      const budget = Math.min(maxNew, spare + maxEvict);
+      const overflow = Math.max(0, candidates.length + budget - env.MAX_CANDIDATES);
+      if (overflow > 0) candidates.splice(candidates.length - overflow, overflow);
+      let added = 0;
+      for (const cand of gated) {
+        if (added >= budget) break;
+        candidates.push(cand);
+        added++;
+      }
+      searchLog.info("Diverse sources merged", {
+        awesomeLists: sources.awesome.lists,
+        curatedTotal: sources.awesome.curatedNames.length,
+        registryHits: sources.registryNames.length,
+        fetched: sources.fetched.length,
+        passedGate: gated.length,
+        candidatesAdded: added,
+      });
+    } else {
+      searchLog.warn("Diverse sources unavailable (timeout/failure) — continuing without them");
+    }
     const doneFunnel = searchLog.time("funnel narrowing", {
       candidates: candidates.length,
       topN: env.FUNNEL_TOP_N,
