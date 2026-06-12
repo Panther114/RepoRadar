@@ -92,21 +92,16 @@ async function resolveOne(name: string): Promise<Candidate | null> {
       per_page: 5,
     });
     const items = res.data.items as unknown as SearchItem[];
-    // Match precision tiers (items are star-sorted, so first hit = most famous):
-    //   1. repo NAME equals the reference ("supabase/supabase" for "supabase"),
-    //   2. repo name CONTAINS it ("firebase-js-sdk" for "firebase" — common for
-    //      orgs whose product repo isn't named exactly after the product),
-    //   3. OWNER equals it (last resort: org match alone can pick an arbitrary
-    //      popular repo of that org, e.g. firebase/functions-samples),
-    //   4. top result, only if prominent enough to plausibly be "the" project.
+    // Only an EXACT repo-name match counts ("supabase/supabase" for
+    // "supabase"). Looser tiers (name-contains, owner-equals, top-stars) all
+    // misfired in eval — "firebase" → invertase/react-native-firebase,
+    // "google analytics" → an MCP server — and a wrong anchor/exclusion is
+    // strictly worse than none. Closed-platform references (firebase, notion,
+    // airtable) intentionally resolve to null: the name-derived queries that
+    // don't need resolution still fire for them.
     const nameEq = items.find((it) => it.name.toLowerCase() === slug);
-    const nameHas = items.find((it) => it.name.toLowerCase().includes(slug));
-    const ownerEq = items.find((it) => it.owner?.login.toLowerCase() === slug);
-    const matched = nameEq ?? nameHas ?? ownerEq;
-    const best = matched ?? items[0];
-    if (!best) return null;
-    if (!matched && best.stargazers_count < 1000) return null; // too obscure to be a famous reference
-    return toCandidate(best);
+    if (!nameEq || nameEq.stargazers_count < 1000) return null;
+    return toCandidate(nameEq);
   } catch {
     return null;
   }
@@ -129,41 +124,31 @@ export async function buildReferenceContext(
   ).slice(0, 2);
   if (names.length === 0) return null;
 
+  // The high-value queries derive from the NAME alone — no resolution needed,
+  // so they also work for closed platforms (firebase, notion) that have no
+  // canonical GitHub repo. In eval, "<x> alternative" under sort:stars was the
+  // single best query for alternative-prompts (surfaced supabase, nhost,
+  // trailbase, bknd). Capped at 2 so they displace at most 2 LLM queries.
+  const primary = names[0];
+  const refQueries = [
+    `topic:${primary.replace(/\s+/g, "-")}-alternative`,
+    `${primary} alternative`,
+  ];
+
+  // Resolution (exact-name only) adds the optional extras: anchor text for the
+  // intent embedding and self-exclusion. A failed resolution costs nothing.
   const resolved = (await Promise.all(names.map(resolveOne))).filter(
     (c): c is Candidate => c !== null,
   );
-  if (resolved.length === 0) return null;
-
-  const refQueries: string[] = [];
-  const anchorParts: string[] = [];
-  const exclude: string[] = [];
-
-  for (let i = 0; i < resolved.length; i++) {
-    const repo = resolved[i];
-    const refName = names[i] ?? repo.name.toLowerCase();
-    const slug = refName.replace(/\s+/g, "-");
-
-    // GitHub convention: alternatives tag themselves `topic:<x>-alternative`.
-    refQueries.push(`topic:${slug}-alternative`);
-    refQueries.push(`${refName} alternative`);
-
-    // The referenced repo's own topics describe the DOMAIN — query by the most
-    // specific ones (skip the project's own name; it would just re-find it).
-    const domainTopics = repo.topics
-      .filter((t) => !t.includes(slug) && !slug.includes(t))
-      .slice(0, 3);
-    if (domainTopics.length >= 2) {
-      refQueries.push(domainTopics.map((t) => `topic:${t}`).join(" "));
-    }
-
-    anchorParts.push([repo.description ?? "", repo.topics.join(" ")].filter(Boolean).join(". "));
-    exclude.push(repo.fullName.toLowerCase());
-  }
+  const anchorText = resolved
+    .map((repo) => [repo.description ?? "", repo.topics.join(" ")].filter(Boolean).join(". "))
+    .join(". ")
+    .slice(0, 600);
 
   return {
     referenced: resolved,
-    anchorText: anchorParts.join(". ").slice(0, 600),
-    refQueries: Array.from(new Set(refQueries)).slice(0, 4),
-    excludeFullNames: exclude,
+    anchorText,
+    refQueries,
+    excludeFullNames: resolved.map((repo) => repo.fullName.toLowerCase()),
   };
 }

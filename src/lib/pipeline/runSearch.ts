@@ -359,9 +359,9 @@ export async function runSearch(
     // two things — extra candidates the GitHub keyword search missed, and a
     // curated-membership set the funnel uses as a quality boost. Registries
     // only fire for explicitly library-shaped queries (npm hits for an infra
-    // query like "kubernetes monitoring" are wrappers, not answers). The whole
-    // fetch runs CONCURRENTLY with light enrichment below and has a hard 10s
-    // budget — a slow registry can never stall the pipeline.
+    // query like "kubernetes monitoring" are wrappers, not answers). The fetch
+    // overlaps the GitHub-pool/graph work above and has a hard 10s budget — a
+    // slow registry can never stall the pipeline. Dedupe happens at merge.
     const REGISTRY_TYPES = new Set(["library", "framework", "cli", "plugin", "extension", "template"]);
     const curatedSet = new Set<string>();
     const sourcesPromise = Promise.race([
@@ -371,10 +371,7 @@ export async function runSearch(
           ? searchRegistries(intent.constraints.keywords, intent.constraints.language).catch(() => [])
           : Promise.resolve([]),
       ]).then(async ([awesome, registryNames]) => {
-        const inPool = new Set(candidates.map((cand) => cand.fullName.toLowerCase()));
-        const newNames = [...awesome.curatedNames.slice(0, 40), ...registryNames].filter(
-          (name) => !inPool.has(name.toLowerCase()),
-        );
+        const newNames = [...awesome.curatedNames.slice(0, 40), ...registryNames];
         const fetched = newNames.length ? await fetchCandidatesByName(newNames.slice(0, 25)) : [];
         return { awesome, registryNames, fetched };
       }),
@@ -393,22 +390,16 @@ export async function runSearch(
       }
     }
 
-    // ── Stage 3: Funnel / narrowing ───────────────────────────────────────────
-    await setJob(searchQueryId, { stage: "funnel", progress: 35 });
-    const lightEvidence = await fetchLightRepoEvidenceBatch(
-      candidates,
-      Number(process.env.LIGHT_ENRICH_TOP_N) || 20,
-    ).catch((err) => {
-      searchLog.warn("Light enrichment failed; funnel will use metadata only", err);
-      return undefined;
-    });
-
-    // Merge the gated source candidates (fetched while light enrichment ran).
-    // Every injected repo must pass the topicality/traction/liveness gate, and
-    // displacement of the GitHub-search pool tail is capped at 10% so out-of-
-    // band sources can never crowd out organically-retrieved candidates (the
-    // ungated first cut cost 0.09 PoolRecall). Injected repos skip light
-    // enrichment — description+topics still embed fine in the funnel.
+    // Merge the gated source candidates BEFORE light enrichment so injected
+    // repos get README-head evidence too — without it their thin text loses
+    // the cross-encoder shortlist to keyword-stuffed organic candidates even
+    // when they are the better answer (react-data-table pool recall hit 1.00
+    // but nDCG fell in the first cut for exactly this reason). Every injected
+    // repo must pass the topicality/traction/liveness gate, and displacement
+    // of the organic pool tail is capped at 10% so out-of-band sources can
+    // never crowd out organically-retrieved candidates.
+    const lightEnrichTopN = Number(process.env.LIGHT_ENRICH_TOP_N) || 20;
+    let sourceAdded = 0;
     const sources = await sourcesPromise;
     if (sources) {
       for (const name of sources.awesome.curatedNames) curatedSet.add(name.toLowerCase());
@@ -426,23 +417,33 @@ export async function runSearch(
       const budget = Math.min(maxNew, spare + maxEvict);
       const overflow = Math.max(0, candidates.length + budget - env.MAX_CANDIDATES);
       if (overflow > 0) candidates.splice(candidates.length - overflow, overflow);
-      let added = 0;
-      for (const cand of gated) {
-        if (added >= budget) break;
-        candidates.push(cand);
-        added++;
-      }
+      // Insert at the light-enrichment boundary: inside the enrichment window,
+      // without demoting the organic head out of it.
+      const insertAt = Math.min(lightEnrichTopN, candidates.length);
+      const toInsert = gated.slice(0, budget);
+      candidates.splice(insertAt, 0, ...toInsert);
+      sourceAdded = toInsert.length;
       searchLog.info("Diverse sources merged", {
         awesomeLists: sources.awesome.lists,
         curatedTotal: sources.awesome.curatedNames.length,
         registryHits: sources.registryNames.length,
         fetched: sources.fetched.length,
         passedGate: gated.length,
-        candidatesAdded: added,
+        candidatesAdded: sourceAdded,
       });
     } else {
       searchLog.warn("Diverse sources unavailable (timeout/failure) — continuing without them");
     }
+
+    // ── Stage 3: Funnel / narrowing ───────────────────────────────────────────
+    await setJob(searchQueryId, { stage: "funnel", progress: 35 });
+    const lightEvidence = await fetchLightRepoEvidenceBatch(
+      candidates,
+      lightEnrichTopN + sourceAdded,
+    ).catch((err) => {
+      searchLog.warn("Light enrichment failed; funnel will use metadata only", err);
+      return undefined;
+    });
     const doneFunnel = searchLog.time("funnel narrowing", {
       candidates: candidates.length,
       topN: env.FUNNEL_TOP_N,
