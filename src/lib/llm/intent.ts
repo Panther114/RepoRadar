@@ -241,7 +241,13 @@ Return ONLY this JSON object (no prose, no markdown fences):
   "queries": string[]                // 6-8 diverse GitHub search query strings
   "canonicalNames": string[]         // up to 8 likely well-known repo full names or project names; guidance only, not ranking
   "referencedProjects": string[]     // projects the user DEFINES the target by ("alternative to X", "like X", "X clone") — the name X only, lowercase; [] if none
-}`;
+}
+
+For "alternative to X" / "like X" prompts, canonicalNames is CRITICAL: always
+list the well-known open-source alternatives you know as owner/repo full names
+(e.g. firebase → supabase/supabase, appwrite/appwrite, pocketbase/pocketbase,
+nhost/nhost). These seed candidate retrieval — missing them loses the best
+answers before ranking even starts.`;
 
 /** Extract intent via the LLM, falling back to heuristics. */
 export async function extractIntent(
