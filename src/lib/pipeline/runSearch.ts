@@ -226,10 +226,14 @@ export async function runSearch(
       refContext = await buildReferenceContext(prompt, intent.referencedProjects).catch(() => null);
     }
     if (refContext) {
-      // High-precision reference queries go FIRST — searchCandidatesDetailed
-      // caps active queries, and these carry the domain signal the prompt's
-      // literal words lack. Anchor text feeds the funnel's intent embedding.
-      intent.queries = Array.from(new Set([...refContext.refQueries, ...intent.queries]));
+      // High-precision reference queries slot in at position 1 — early enough
+      // to survive the active-query cap, but leaving the LLM's strongest query
+      // at position 0 so sort-variant re-issues (which seed from the top 2)
+      // cover one LLM query AND one reference query instead of only references.
+      // Anchor text feeds the funnel's intent embedding.
+      intent.queries = Array.from(
+        new Set([...intent.queries.slice(0, 1), ...refContext.refQueries, ...intent.queries.slice(1)]),
+      );
       intent.anchorText = refContext.anchorText;
       searchLog.info("Reference resolved", {
         referenced: refContext.referenced.map((r) => r.fullName),
