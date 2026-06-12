@@ -61,6 +61,15 @@ export interface Intent {
   queries: string[];
   /** Guidance-only names/owners suggested by intent extraction; never used as a ranking shortcut. */
   canonicalNames?: string[];
+  /**
+   * Domain vocabulary recovered by reference resolution ("alternative to X" →
+   * X's description + topics). Appended to the intent embedding text so the
+   * funnel ranks by the referenced project's DOMAIN, which the prompt's literal
+   * words don't contain.
+   */
+  anchorText?: string;
+  /** Project names the user defined the target by ("alternative to X" → ["x"]). */
+  referencedProjects?: string[];
 }
 
 /** A repository candidate as returned by GitHub search. */

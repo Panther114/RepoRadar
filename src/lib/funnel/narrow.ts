@@ -124,6 +124,7 @@ function intentText(intent: Intent): string {
     c.keywords.join(" "),
     c.requiredFeatures.join(" "),
     c.language ?? "",
+    intent.anchorText ?? "",
   ]
     .filter(Boolean)
     .join(". ");
@@ -142,8 +143,15 @@ export async function narrowCandidates(
   rescuedNames: string[] = [],
   debugContext?: { searchQueryId: string },
   hydeDoc?: string | null,
+  curatedNames?: Set<string>,
 ): Promise<FunnelResult> {
   const c = intent.constraints;
+  // Curated boost (v1.1.4): membership in a domain awesome-list is a human
+  // relevance prior. Kept small — it breaks ties between near-equal candidates
+  // but can never rescue an off-topic repo past the relevance gate.
+  const CURATED_BOOST = 0.04;
+  const curatedBoost = (candidate: Candidate): number =>
+    curatedNames?.has(candidate.fullName.toLowerCase()) ? CURATED_BOOST : 0;
   const candTexts = candidates.map((candidate) => candidateText(candidate, lightEvidence?.get(candidate.githubId)));
 
   // Aspect-decomposed ranking: when the LLM produced ≥2 orthogonal aspects we
@@ -220,6 +228,7 @@ export async function narrowCandidates(
         worstAspect: sims[i].aspectSims.length ? Number(Math.min(...sims[i].aspectSims).toFixed(4)) : null,
         similarity: Number(similarity.toFixed(4)),
         relevance: Number(relevance[i].toFixed(4)),
+        curated: curatedBoost(candidate) > 0,
       });
     }
 
@@ -231,7 +240,8 @@ export async function narrowCandidates(
       0.68 * relevance[i] +
         0.10 * recencyScore(candidate.pushedAt, c.pushedWithinDays) +
         0.06 * licenseScore(candidate.licenseSpdx, c.licenses) +
-        0.16 * credibilityScore(candidate.stars, candidate.forks, c.includeSmallProjects),
+        0.16 * credibilityScore(candidate.stars, candidate.forks, c.includeSmallProjects) +
+        curatedBoost(candidate),
     );
     return { candidate, similarity, prefilterScore, intentEmbedding };
   });
@@ -261,7 +271,8 @@ export async function narrowCandidates(
           0.60 * ceScores[i] +
             0.20 * prominenceScore(e.candidate.stars, c.includeSmallProjects) +
             0.12 * credibilityScore(e.candidate.stars, e.candidate.forks, c.includeSmallProjects) +
-            0.08 * recencyScore(e.candidate.pushedAt, c.pushedWithinDays),
+            0.08 * recencyScore(e.candidate.pushedAt, c.pushedWithinDays) +
+            curatedBoost(e.candidate),
         );
       });
       shortlist.sort((a, b) => b.prefilterScore - a.prefilterScore);

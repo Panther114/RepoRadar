@@ -27,6 +27,10 @@ import { createLogger } from "@/lib/logger";
 import { findGuidanceHints } from "@/lib/search/guidance";
 import { generateHydeDoc } from "@/lib/search/hyde";
 import { expandByTopics } from "@/lib/search/graphExpand";
+import { buildReferenceContext } from "@/lib/search/referenceResolver";
+import { mineAwesomeLists } from "@/lib/search/awesome";
+import { searchRegistries } from "@/lib/search/registries";
+import { fetchCandidatesByName } from "@/lib/github/fetchRepos";
 import { writeSearchDiagnostics } from "@/lib/pipeline/diagnostics";
 import { debugTrace, searchDebugEnabled } from "@/lib/pipeline/debugTrace";
 import type { Analysis, Candidate, Intent, RepoEvidence, SearchDiagnostics, SearchFilters } from "@/lib/types";
@@ -182,7 +186,7 @@ export async function runSearch(
     // Fire LLM intent and heuristic-based search simultaneously.
     const searchTtlMs = (Number(process.env.SEARCH_CACHE_TTL_HOURS) || 2) * 3_600_000;
 
-    const [intentResult, heuristicCandidates] = await Promise.all([
+    const [intentResult, heuristicCandidates, refContextEarly] = await Promise.all([
       extractIntent(prompt, filters).catch((err) => {
         searchLog.warn("LLM intent failed, using heuristic", err);
         return heuristic;
@@ -203,10 +207,34 @@ export async function runSearch(
         saveCandidateCache(h, results.candidates).catch(() => {});
         return { candidates: results.candidates, fromCache: false };
       })(),
+      // Reference resolution (v1.1.4): regex-detected "alternative to X" /
+      // "like X" references resolve concurrently with intent extraction.
+      buildReferenceContext(prompt).catch((err) => {
+        searchLog.warn("Reference resolution failed (non-fatal)", err);
+        return null;
+      }),
     ]);
 
     const intent: Intent = intentResult;
     doneIntent();
+
+    // If the regexes found nothing but the LLM intent did flag a referenced
+    // project, resolve it now (rare; costs one extra GitHub call).
+    let refContext = refContextEarly;
+    if (!refContext && intent.referencedProjects?.length) {
+      refContext = await buildReferenceContext(prompt, intent.referencedProjects).catch(() => null);
+    }
+    if (refContext) {
+      // High-precision reference queries go FIRST — searchCandidatesDetailed
+      // caps active queries, and these carry the domain signal the prompt's
+      // literal words lack. Anchor text feeds the funnel's intent embedding.
+      intent.queries = Array.from(new Set([...refContext.refQueries, ...intent.queries]));
+      intent.anchorText = refContext.anchorText;
+      searchLog.info("Reference resolved", {
+        referenced: refContext.referenced.map((r) => r.fullName),
+        refQueries: refContext.refQueries,
+      });
+    }
     searchLog.info("Intent extracted", {
       normalizedPrompt: intent.normalizedPrompt,
       queries: intent.queries,
@@ -326,6 +354,72 @@ export async function runSearch(
       searchLog.warn("Topic graph expansion failed (non-fatal)", err);
     }
 
+    // Diverse sources (v1.1.4): awesome-list mining + package registries run in
+    // parallel and feed two things — extra candidates the GitHub keyword search
+    // missed, and a curated-membership set the funnel uses as a quality boost.
+    // Hard 10s budget: a slow registry can never stall the pipeline.
+    const curatedSet = new Set<string>();
+    try {
+      const doneSources = searchLog.time("diverse sources (awesome + registries)");
+      const sourcesPromise = Promise.all([
+        mineAwesomeLists(intent.constraints.keywords).catch(() => ({ curatedNames: [], lists: [] })),
+        searchRegistries(intent.constraints.keywords, intent.constraints.language).catch(() => []),
+      ]);
+      const timed = await Promise.race([
+        sourcesPromise,
+        new Promise<null>((resolve) => setTimeout(() => resolve(null), 10_000)),
+      ]);
+      if (timed) {
+        const [awesome, registryNames] = timed;
+        for (const name of awesome.curatedNames) curatedSet.add(name.toLowerCase());
+
+        const inPool = new Set(candidates.map((cand) => cand.fullName.toLowerCase()));
+        const newNames = [
+          ...awesome.curatedNames.slice(0, 40),
+          ...registryNames,
+        ].filter((name) => !inPool.has(name.toLowerCase()));
+        if (newNames.length) {
+          const fetched = await fetchCandidatesByName(newNames.slice(0, 25));
+          // The pool is usually at MAX_CANDIDATES already; the RRF-fused tail is
+          // the weakest part, so curated/registry repos may displace it (capped,
+          // so GitHub-search results always keep the majority of the pool).
+          const maxNew = Math.min(fetched.length, Math.floor(env.MAX_CANDIDATES * 0.25));
+          const overflow = candidates.length + maxNew - env.MAX_CANDIDATES;
+          if (overflow > 0) candidates.splice(candidates.length - overflow, overflow);
+          let added = 0;
+          for (const cand of fetched) {
+            if (added >= maxNew || inPool.has(cand.fullName.toLowerCase())) continue;
+            candidates.push(cand);
+            inPool.add(cand.fullName.toLowerCase());
+            added++;
+          }
+          searchLog.info("Diverse sources merged", {
+            awesomeLists: awesome.lists,
+            curatedTotal: awesome.curatedNames.length,
+            registryHits: registryNames.length,
+            candidatesAdded: added,
+          });
+        }
+      } else {
+        searchLog.warn("Diverse sources timed out (10s) — continuing without them");
+      }
+      doneSources();
+    } catch (err) {
+      searchLog.warn("Diverse sources failed (non-fatal)", err);
+    }
+
+    // An "alternative to X" search must never return X itself.
+    if (refContext?.excludeFullNames.length) {
+      const excluded = new Set(refContext.excludeFullNames);
+      const before = candidates.length;
+      candidates = candidates.filter((cand) => !excluded.has(cand.fullName.toLowerCase()));
+      if (candidates.length < before) {
+        searchLog.info("Excluded referenced repo(s) from pool", {
+          excluded: refContext.excludeFullNames,
+        });
+      }
+    }
+
     // ── Stage 3: Funnel / narrowing ───────────────────────────────────────────
     await setJob(searchQueryId, { stage: "funnel", progress: 35 });
     const lightEvidence = await fetchLightRepoEvidenceBatch(
@@ -351,6 +445,7 @@ export async function runSearch(
         intent.canonicalNames ?? [],
         { searchQueryId },
         hydeDoc,
+        curatedSet.size ? curatedSet : undefined,
       );
       doneFunnel();
       searchLog.info("Funnel complete", { survivors: funnelResult.entries.length });
