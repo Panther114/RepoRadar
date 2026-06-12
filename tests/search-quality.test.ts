@@ -7,6 +7,7 @@ import {
   stripUnsafeQualifiers,
 } from "../src/lib/search/queryPolicy";
 import { findGuidanceHints } from "../src/lib/search/guidance";
+import { detectReferences } from "../src/lib/search/referenceDetect";
 import { fuseCandidateSources } from "../src/lib/search/candidateFusion";
 import { applyListwiseRanking } from "../src/lib/llm/listwise";
 import { BENCHMARK_PROMPTS, clampBenchmarkLimit } from "../scripts/search-benchmark.mjs";
@@ -208,5 +209,31 @@ describe("search quality policy", () => {
     assert(BENCHMARK_PROMPTS.every((p) => p.prompt.split(/\s+/).length <= 5));
     assert.equal(clampBenchmarkLimit(999), 10);
     assert.equal(clampBenchmarkLimit(undefined), 6);
+  });
+});
+
+describe("reference detection (v1.1.4)", () => {
+  it("detects 'alternative to X' references", () => {
+    assert.deepEqual(detectReferences("open source alternative to firebase"), ["firebase"]);
+    assert.deepEqual(detectReferences("alternatives to airtable"), ["airtable"]);
+  });
+
+  it("detects 'X alternative' and 'like X' phrasings", () => {
+    assert.deepEqual(detectReferences("self hosted notion alternative"), ["notion"]);
+    assert.deepEqual(detectReferences("something like supabase but lighter"), ["supabase"]);
+    assert.deepEqual(detectReferences("stripe clone"), ["stripe"]);
+    assert.deepEqual(detectReferences("a notion-like editor"), ["notion"]);
+  });
+
+  it("ignores generic words and non-reference prompts", () => {
+    assert.deepEqual(detectReferences("react data table with virtual scrolling"), []);
+    assert.deepEqual(detectReferences("rust web framework"), []);
+    assert.deepEqual(detectReferences("kubernetes monitoring dashboard"), []);
+    // "open source alternatives" with no named project must not capture "open".
+    assert.deepEqual(detectReferences("good open source alternatives"), []);
+  });
+
+  it("keeps dotted/hyphenated names intact", () => {
+    assert.deepEqual(detectReferences("alternative to next.js"), ["next.js"]);
   });
 });

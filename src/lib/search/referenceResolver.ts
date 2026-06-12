@@ -1,5 +1,8 @@
 import { octokit } from "@/lib/github/client";
+import { detectReferences } from "@/lib/search/referenceDetect";
 import type { Candidate } from "@/lib/types";
+
+export { detectReferences };
 
 // Reference resolution (v1.1.4): the transition layer between the user's
 // wording and query generation for prompts that DEFINE the target by pointing
@@ -28,43 +31,6 @@ export interface ReferenceContext {
 
 export function referenceResolveEnabled(): boolean {
   return String(process.env.REF_RESOLVE ?? "true").toLowerCase() === "true";
-}
-
-// Patterns that point at another project. The captured group is the project
-// name — one or two words, possibly hyphen/dot-qualified ("next.js", "k8s").
-const REF_PATTERNS: RegExp[] = [
-  /\b(?:open[- ]source\s+)?alternatives?\s+(?:to|for|of)\s+([\w.&-]+(?:\s+[\w.&-]+)?)/i,
-  /\b(?:self[- ]hosted|free|lightweight|minimal)\s+([\w.&-]+(?:\s+[\w.&-]+)?)\s+alternatives?\b/i,
-  /\b([\w.&-]+(?:\s+[\w.&-]+)?)\s+alternatives?\b/i,
-  /\b(?:similar\s+to|like|clone\s+of|replacement\s+for|inspired\s+by)\s+([\w.&-]+(?:\s+[\w.&-]+)?)/i,
-  /\b([\w.&-]+)[- ]like\b/i,
-  /\b([\w.&-]+)\s+clones?\b/i,
-];
-
-// Generic words that the loose patterns can capture but never name a project.
-const NOT_PROJECTS = new Set([
-  "a", "an", "the", "it", "them", "this", "that", "good", "best", "free",
-  "open", "source", "open-source", "self-hosted", "hosted", "cheap", "paid",
-  "commercial", "proprietary", "great", "modern", "simple", "lightweight",
-  "library", "framework", "tool", "app", "software", "project", "repo",
-  "something", "anything", "one",
-]);
-
-/** Extract candidate project names the prompt points at (deduped, max 2). */
-export function detectReferences(prompt: string): string[] {
-  const found: string[] = [];
-  for (const re of REF_PATTERNS) {
-    const m = re.exec(prompt);
-    if (!m) continue;
-    // Trim trailing generic words from 2-word captures ("notion app" → "notion").
-    const words = m[1].trim().split(/\s+/);
-    while (words.length > 1 && NOT_PROJECTS.has(words[words.length - 1].toLowerCase())) words.pop();
-    const name = words.join(" ").toLowerCase();
-    if (!name || NOT_PROJECTS.has(name) || name.length < 2) continue;
-    if (!found.includes(name)) found.push(name);
-    if (found.length >= 2) break;
-  }
-  return found;
 }
 
 interface SearchItem {
@@ -126,14 +92,20 @@ async function resolveOne(name: string): Promise<Candidate | null> {
       per_page: 5,
     });
     const items = res.data.items as unknown as SearchItem[];
-    // Exact repo-name or owner-name match wins; otherwise top-stars result, but
-    // only if it's prominent enough to plausibly be "the" project people mean.
-    const exact = items.find(
-      (it) => it.name.toLowerCase() === slug || it.owner?.login.toLowerCase() === slug,
-    );
-    const best = exact ?? items[0];
+    // Match precision tiers (items are star-sorted, so first hit = most famous):
+    //   1. repo NAME equals the reference ("supabase/supabase" for "supabase"),
+    //   2. repo name CONTAINS it ("firebase-js-sdk" for "firebase" — common for
+    //      orgs whose product repo isn't named exactly after the product),
+    //   3. OWNER equals it (last resort: org match alone can pick an arbitrary
+    //      popular repo of that org, e.g. firebase/functions-samples),
+    //   4. top result, only if prominent enough to plausibly be "the" project.
+    const nameEq = items.find((it) => it.name.toLowerCase() === slug);
+    const nameHas = items.find((it) => it.name.toLowerCase().includes(slug));
+    const ownerEq = items.find((it) => it.owner?.login.toLowerCase() === slug);
+    const matched = nameEq ?? nameHas ?? ownerEq;
+    const best = matched ?? items[0];
     if (!best) return null;
-    if (!exact && best.stargazers_count < 1000) return null; // too obscure to be a famous reference
+    if (!matched && best.stargazers_count < 1000) return null; // too obscure to be a famous reference
     return toCandidate(best);
   } catch {
     return null;
