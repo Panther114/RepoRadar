@@ -6,6 +6,8 @@ const SYSTEM = `You are RepoRadar's listwise repository ranker. Rank ALL candida
 
 Prefer the repositories that best satisfy the plain-language need, even when the prompt is short or vague. Use evidence only. A famous repo gets no automatic win unless the evidence fits the user need. A rescued or guidance-suggested repo gets no shortcut.
 
+For library/framework/tool searches, rank established canonical implementations of that exact capability above adjacent projects, UI frameworks, tutorials, comparisons, examples, and thin wrappers. A mature canonical project with a generic name is usually a better result than a literal-name side project when both evidence and ecosystem traction fit the need.
+
 CRITICAL RELEVANCE RULE: set "relevant": false for any candidate that does NOT genuinely match the user's need — e.g. an off-topic library that merely shares a keyword (a state-manager for a "data table" query), a personal tutorial / course / boilerplate / homework repo, an empty or abandoned demo, or a name-only keyword match with no real capability. Irrelevant repos are always ranked AFTER every relevant one regardless of stars. Be strict: it is better to mark a weak repo irrelevant than to pollute the shortlist.
 
 Classify each repository with ONE primary type label from:
@@ -178,6 +180,7 @@ export function applyListwiseRanking(args: {
       const analysis: Analysis = {
         ...baseline,
         repoType,
+        relevant: ranked.relevant,
         fit,
         total: computeTotal(fit, baseline.future, baseline.underrated),
         summary: ranked.summary || baseline.summary,

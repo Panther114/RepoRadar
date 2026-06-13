@@ -327,8 +327,8 @@ export async function extractIntent(
 
   const guidanceHints = findGuidanceHints(prompt);
   const canonicalNames = Array.from(new Set([
-    ...(d.canonicalNames ?? []),
     ...guidanceHints.flatMap((hint) => hint.repoNames),
+    ...(d.canonicalNames ?? []),
     ...(fallback.canonicalNames ?? []),
   ])).slice(0, 8);
 

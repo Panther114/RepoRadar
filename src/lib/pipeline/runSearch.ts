@@ -30,6 +30,7 @@ import { expandByTopics } from "@/lib/search/graphExpand";
 import { buildReferenceContext } from "@/lib/search/referenceResolver";
 import { mineAwesomeLists } from "@/lib/search/awesome";
 import { searchRegistries } from "@/lib/search/registries";
+import { normalizeCanonicalNames } from "@/lib/search/canonical";
 import { fetchCandidatesByName } from "@/lib/github/fetchRepos";
 import { passesInjectionGate } from "@/lib/search/sourceGate";
 import { writeSearchDiagnostics } from "@/lib/pipeline/diagnostics";
@@ -122,6 +123,7 @@ function makeDiagnostics(args: {
   searchQueryId: string;
   prompt: string;
   intent: Intent;
+  resolvedCanonicalNames: string[];
   heuristic: Intent;
   activeQueries: string[];
   perQueryResults: { query: string; total: number; repos: string[] }[];
@@ -129,7 +131,7 @@ function makeDiagnostics(args: {
   candidates: Candidate[];
   survivors?: string[];
 }): SearchDiagnostics {
-  const canonicalNames = args.intent.canonicalNames ?? [];
+  const canonicalNames = args.resolvedCanonicalNames;
   const candidateNames = new Set(args.candidates.map((c) => c.fullName.toLowerCase()));
   const survivorNames = new Set((args.survivors ?? []).map((name) => name.toLowerCase()));
   const droppedKnownCandidates = canonicalNames.filter((name) => {
@@ -144,6 +146,7 @@ function makeDiagnostics(args: {
     heuristicQueries: args.heuristic.queries,
     guidanceHints: findGuidanceHints(args.prompt),
     canonicalNames,
+    resolvedCanonicalNames: canonicalNames,
     activeQueries: args.activeQueries,
     perQueryResults: args.perQueryResults,
     dedupeCount: args.dedupeCount,
@@ -265,6 +268,7 @@ export async function runSearch(
     let activeQueries: string[] = [];
     let perQueryResults: { query: string; total: number; repos: string[] }[] = [];
     let dedupeCount = 0;
+    let resolvedCanonicalNames: string[] = [];
     const llmHash = hashJson({
       q: [...intent.queries].sort(),
       canonical: [...(intent.canonicalNames ?? [])].sort(),
@@ -294,6 +298,7 @@ export async function runSearch(
         activeQueries = details.activeQueries;
         perQueryResults = details.perQueryResults;
         dedupeCount = details.dedupeCount;
+        resolvedCanonicalNames = details.resolvedCanonicalNames;
         saveCandidateCache(llmHash, candidates).catch(() => {});
         searchLog.info("Candidates found (LLM fresh search)", { count: candidates.length });
 
@@ -315,12 +320,14 @@ export async function runSearch(
         fromCache: heuristicCandidates.fromCache,
       });
     }
+    intent.canonicalNames = normalizeCanonicalNames(intent.canonicalNames ?? [], candidates, resolvedCanonicalNames);
     doneSearch();
 
     writeSearchDiagnostics(makeDiagnostics({
       searchQueryId,
       prompt,
       intent,
+      resolvedCanonicalNames: intent.canonicalNames ?? [],
       heuristic,
       activeQueries,
       perQueryResults,
@@ -420,7 +427,20 @@ export async function runSearch(
       const spare = Math.max(0, env.MAX_CANDIDATES - candidates.length);
       const budget = Math.min(maxNew, spare + maxEvict);
       const overflow = Math.max(0, candidates.length + budget - env.MAX_CANDIDATES);
-      if (overflow > 0) candidates.splice(candidates.length - overflow, overflow);
+      if (overflow > 0) {
+        const protectedNames = new Set(
+          (intent.canonicalNames ?? [])
+            .map((name) => name.trim().replace(/^https:\/\/github\.com\//i, "").toLowerCase())
+            .filter((name) => name.includes("/")),
+        );
+        let remaining = overflow;
+        for (let i = candidates.length - 1; i >= 0 && remaining > 0; i--) {
+          if (protectedNames.has(candidates[i].fullName.toLowerCase())) continue;
+          candidates.splice(i, 1);
+          remaining--;
+        }
+        if (remaining > 0) candidates.splice(Math.max(0, candidates.length - remaining), remaining);
+      }
       // Insert at the light-enrichment boundary: inside the enrichment window,
       // without demoting the organic head out of it.
       const insertAt = Math.min(lightEnrichTopN, candidates.length);
@@ -478,6 +498,7 @@ export async function runSearch(
       searchQueryId,
       prompt,
       intent,
+      resolvedCanonicalNames: intent.canonicalNames ?? [],
       heuristic,
       activeQueries,
       perQueryResults,
@@ -702,8 +723,43 @@ export async function runSearch(
     }
 
     const minFuture = filters?.minFutureScore ?? null;
+    const dropIrrelevantResults = String(process.env.RESULT_RELEVANCE_FLOOR ?? "true").toLowerCase() !== "false";
+    const explicitlyAskedForSmall =
+      filters?.includeSmallProjects === true ||
+      /\b(small|underrated|hidden|niche|lesser|promising|new)\b/i.test(prompt);
+    const explicitlyAskedForMeta =
+      /\b(awesome|list|comparison|compare|benchmark|benchmarks|survey)\b/i.test(prompt);
+    const shouldDropLowSignal = (r: (typeof scored)[0]): boolean =>
+      !explicitlyAskedForSmall &&
+      r.evidence.candidate.stars < 50 &&
+      (r.analysis.future < 0.25 || r.analysis.fit < 0.5);
+    const shouldDropMetaRepo = (r: (typeof scored)[0]): boolean => {
+      if (explicitlyAskedForMeta) return false;
+      const text = [
+        r.evidence.candidate.fullName,
+        r.evidence.candidate.name,
+        r.evidence.candidate.description ?? "",
+        r.analysis.repoType,
+      ].join(" ").toLowerCase();
+      return /\b(awesome|comparison|benchmark|benchmarks|survey)\b/.test(text);
+    };
     let rank = 1;
+    let relevanceDropped = 0;
+    let lowSignalDropped = 0;
+    let metaDropped = 0;
     for (const r of scored) {
+      if (dropIrrelevantResults && r.analysis.relevant === false) {
+        relevanceDropped++;
+        continue;
+      }
+      if (dropIrrelevantResults && shouldDropMetaRepo(r)) {
+        metaDropped++;
+        continue;
+      }
+      if (dropIrrelevantResults && shouldDropLowSignal(r)) {
+        lowSignalDropped++;
+        continue;
+      }
       if (minFuture != null && r.analysis.future < minFuture) continue;
       await saveResult({
         searchQueryId,
@@ -715,7 +771,13 @@ export async function runSearch(
       rank++;
     }
 
-    searchLog.info("Search complete", { resultsStored: rank - 1 });
+    searchLog.info("Search complete", {
+      resultsStored: rank - 1,
+      relevanceDropped,
+      lowSignalDropped,
+      metaDropped,
+      dropIrrelevantResults,
+    });
     await setJob(searchQueryId, { status: "completed", stage: "done", progress: 100 });
   } catch (error) {
     const msg = error instanceof Error ? error.message : String(error);

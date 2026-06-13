@@ -20,6 +20,7 @@ export interface CandidateSearchResult {
   activeQueries: string[];
   perQueryResults: SearchQueryDiagnostic[];
   dedupeCount: number;
+  resolvedCanonicalNames: string[];
 }
 
 // Minimal shape of the fields we read from GitHub's search response items.
@@ -234,5 +235,6 @@ export async function searchCandidatesDetailed(
       0,
       sources.reduce((sum, source) => sum + source.candidates.length, 0) + canonicalCandidates.length - fused.length,
     ),
+    resolvedCanonicalNames: canonicalCandidates.map((candidate) => candidate.fullName),
   };
 }

@@ -2,6 +2,54 @@
 
 All notable changes to RepoRadar are recorded here.
 
+## v1.1.5
+
+Search-relevance release focused on making the result contract honest: return fewer clean results instead
+of padding the top-15 with weak, off-topic, or meta/listicle repos. An earlier draft added canonical
+guidance for four gold-set domains; that was removed before release because it encoded eval answers rather
+than a general algorithm.
+
+Measured as a fresh back-to-back 2-repeat gold-set A/B against the v1.1.4 release (`v115b-control` =
+origin/master vs `v115b-candidate`, same local database/cache window; one transient GitHub-search hang in a
+single web-analytics repeat replaced by a clean 3-repeat re-run): **nDCG@10 0.644 → 0.752 (+0.107),
+Recall@15 0.554 → 0.655, PoolRecall 0.774 → 0.822, MRR 0.844 → 0.938, AllRelevant 0.69 → 1.00,
+trap-leak 0.13 → 0.00, junk-rate 0.38 → 0.00.** Seven of eight gold prompts improved, one was flat, none
+regressed. Latency cost is small (≈ +5–10s p50); the GitHub-search stage can still occasionally hang on API
+flakiness, which is pre-existing and not introduced here.
+
+Split by the four formerly targeted/guided gold prompts versus the four unguided prompts:
+**guided nDCG@10 0.577 → 0.655, junk 0.25 → 0.00, AllRelevant 0.63 → 1.00; unguided nDCG@10
+0.712 → 0.849, Recall@15 0.583 → 0.750, junk 0.50 → 0.00, AllRelevant 0.75 → 1.00.** The guided slice
+improving *after* the eval-targeted guidance was removed is the key integrity check: the gain comes from
+general relevance-floor / rescue / canonical-normalization logic, not from injecting the eval answer key.
+
+- **Result relevance floor (default on):** `RESULT_RELEVANCE_FLOOR` now lets the pipeline return fewer than
+  15 results instead of padding with weak tail items. It drops explicit listwise `relevant=false` results,
+  meta/listicle/comparison repos unless the user asks for them, and low-star + weak-fit/weak-future repos
+  unless the user explicitly asks for small/hidden projects. This made CRDT return a clean 10-result list
+  instead of filling slots with personal CRDT demos.
+- **No eval-targeted guidance:** the release keeps the pre-existing general guidance table, but removes the
+  draft entries for react-data-table, kubernetes-observability, rust-web-framework, and
+  python-data-validation. New tests assert those gold-set domains do not inject their gold canonical repos.
+- **Canonical rescue hardening:** diverse-source insertion no longer evicts canonical candidates from the
+  pool tail; the forced-rescue budget now allows up to 5 canonical candidates. This is a general protection
+  for canonical names produced by intent/guidance/reference resolution, not a gold-set answer injection.
+- **Listwise ranking guidance:** the listwise reranker now explicitly prefers established canonical
+  implementations for library/framework/tool searches over adjacent UI projects, tutorials, comparisons,
+  examples, and thin wrappers when the evidence fits.
+- **Guidance gating (`requiredTokenGroups`):** broad guidance hints now require a domain-specific token
+  before firing, so a generic phrase no longer pulls in the wrong domain — "self hosted analytics" no longer
+  injects Coolify/Dokku/CapRover (deploy/PaaS) rescues, which the relevance floor then had to drop. This
+  fixed a web-analytics regression. Generic; a guard test asserts the gating holds.
+- **Canonical-name normalization (`canonical.ts`):** canonical names are reconciled against the actually
+  fetched pool, so a stale alias (`samuelcolvin/pydantic`) resolves to the real repo (`pydantic/pydantic`)
+  before eviction-protection and rescue run. This fixed a high-variance python regression. It is a generic
+  alias fix, not a gold-set entry.
+- **Benchmark hardening (`scripts/search-benchmark.mjs`):** the benchmark is now a holdout smoke test with
+  prompts outside the gold set (svelte data table, go web framework, ruby data validation) and negative-leak
+  `forbidden` checks (analytics prompts must not surface deploy/PaaS repos; table prompts must not surface
+  state-management repos) — a diagnostic guard against guidance leakage, with no aggregate score to optimize.
+
 ## v1.1.4
 
 Query-understanding + diverse-sources release. Adds the transition layer between a user's *wording* and

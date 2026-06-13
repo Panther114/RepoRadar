@@ -45,6 +45,13 @@ function poolFor(searchId) {
     .filter((e) => e?.searchQueryId === searchId);
   return rows.length ? rows[rows.length - 1].candidatePool ?? null : null;
 }
+function diagnosticsFor(searchId) {
+  if (!fs.existsSync(DIAG)) return null;
+  const rows = fs.readFileSync(DIAG, "utf8").split(/\r?\n/).filter(Boolean)
+    .map((l) => { try { return JSON.parse(l); } catch { return null; } })
+    .filter((e) => e?.searchQueryId === searchId);
+  return rows.length ? rows[rows.length - 1] : null;
+}
 const median = (xs) => { const s = [...xs].sort((a, b) => a - b); return s.length ? s[Math.floor(s.length / 2)] : null; };
 
 async function runOnce(prompt) {
@@ -64,7 +71,8 @@ async function runOnce(prompt) {
     future: r.scores?.future ?? 0,
     source: r.analysis?.source ?? "?",
   }));
-  return { searchId, latency, results, pool: poolFor(searchId), status: data.status };
+  const diagnostics = diagnosticsFor(searchId);
+  return { searchId, latency, results, pool: diagnostics?.candidatePool ?? poolFor(searchId), diagnostics, status: data.status };
 }
 
 async function main() {
@@ -76,6 +84,8 @@ async function main() {
     const repeatMetrics = [];
     const poolRecalls = [];
     let lastResults = [];
+    let lastDiagnostics = null;
+    const repeats = [];
     for (let r = 0; r < REPEATS; r++) {
       const run = await runOnce(item.prompt);
       latencies.push(run.latency);
@@ -84,6 +94,20 @@ async function main() {
       const pr = poolRecall(item, run.pool);
       if (pr) poolRecalls.push(pr.recall);
       lastResults = run.results;
+       lastDiagnostics = run.diagnostics;
+      repeats.push({
+        repeat: r + 1,
+        searchId: run.searchId,
+        status: run.status,
+        latency: run.latency,
+        metrics: m,
+        poolRecall: pr?.recall ?? null,
+        poolMissing: pr?.missing ?? [],
+        top: run.results.slice(0, 15).map((result) => result.fullName),
+        guidanceHintIds: (run.diagnostics?.guidanceHints ?? []).map((hint) => hint.id),
+        canonicalNames: run.diagnostics?.canonicalNames ?? [],
+        activeQueries: run.diagnostics?.activeQueries ?? [],
+      });
       process.stdout.write(`  ${item.prompt.padEnd(40)} r${r + 1} ndcg=${m.ndcg10.toFixed(2)} rec=${(m.recall15 ?? 0).toFixed(2)} trap=${m.trapLeak} junk=${m.junk} ${run.latency.toFixed(0)}s\n`);
     }
     const avg = (k) => repeatMetrics.reduce((s, m) => s + (m[k] ?? 0), 0) / repeatMetrics.length;
@@ -93,11 +117,16 @@ async function main() {
       mrr: avg("mrr"), trapLeak: avg("trapLeak"), junk: avg("junk"), allRelevant: avg("allRelevant"),
       poolRecall: poolRecalls.length ? poolRecalls.reduce((s, v) => s + v, 0) / poolRecalls.length : null,
       ndcgRange: [Math.min(...repeatMetrics.map((m) => m.ndcg10)), Math.max(...repeatMetrics.map((m) => m.ndcg10))],
+      guidanceHintIds: Array.from(new Set(repeats.flatMap((repeat) => repeat.guidanceHintIds))),
+      guided: repeats.some((repeat) => repeat.guidanceHintIds.length > 0),
+      canonicalNames: lastDiagnostics?.canonicalNames ?? [],
       top: lastResults.slice(0, 15).map((r) => r.fullName),
+      repeats,
     });
   }
   const agg = aggregate(rows);
-  agg.poolRecall = rows.map((r) => r.poolRecall).filter((v) => v != null).reduce((s, v, _, a) => s + v / a.length, 0);
+  const poolRows = rows.map((r) => r.poolRecall).filter((v) => v != null);
+  agg.poolRecall = poolRows.length ? poolRows.reduce((s, v, _, a) => s + v / a.length, 0) : null;
   agg.latencyP50 = median(latencies);
   agg.latencyP95 = [...latencies].sort((a, b) => a - b)[Math.floor(latencies.length * 0.95)] ?? Math.max(...latencies);
 
@@ -112,7 +141,7 @@ async function main() {
 }
 
 function capturedFlags() {
-  const keys = ["MAX_CANDIDATES", "FUNNEL_TOP_N", "SEARCH_SORT_VARIANTS", "HYBRID_FUNNEL", "HYDE", "GRAPH_TOPICS", "MMR_DIVERSIFY", "CROSS_ENCODER_RERANK", "GITHUB_PER_PAGE"];
+  const keys = ["MAX_CANDIDATES", "FUNNEL_TOP_N", "RESULT_RELEVANCE_FLOOR", "SEARCH_SORT_VARIANTS", "HYBRID_FUNNEL", "HYDE", "GRAPH_TOPICS", "MMR_DIVERSIFY", "CROSS_ENCODER_RERANK", "GITHUB_PER_PAGE"];
   const o = {};
   for (const k of keys) if (process.env[k] != null) o[k] = process.env[k];
   return o;
