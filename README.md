@@ -68,8 +68,9 @@ rather than popularity alone.
 
 | Stage | What happens | Why it matters |
 |---|---|---|
-| Intent | Parses the user's plain-English need into search constraints | Short prompts become structured searches |
+| Intent | Parses the user's plain-English need into search constraints; "alternative to X" / "like X" prompts resolve X and derive dedicated queries | Short prompts become structured searches, and reference-style prompts gain the domain vocabulary their literal words lack |
 | GitHub search | Runs multiple query variants, including `sort:stars`/`sort:updated` re-issues, RRF-fused | Canonical high-star and freshly-active repos reliably enter the pool |
+| Diverse sources | Mines `awesome-*` lists and npm/crates.io search; quality-gated repos join the pool | Human-curated and registry-ranked repos GitHub's "best match" buries become candidates |
 | Candidate cache | Reuses fresh candidate pools when possible | Keeps repeated searches faster and cheaper |
 | Vector funnel | Local embeddings (conjunctive per-aspect) + a credibility floor narrow the pool | Drops weak matches and keyword-stuffed 0-signal repos before expensive enrichment |
 | Cross-encoder rerank | A local (query, repo)-pair model reranks the shortlist, paired with a prominence co-signal | Sharper relevance without burying canonical projects under keyword-similar demos |
@@ -79,6 +80,10 @@ rather than popularity alone.
 > v1.1.3 adds sort-variant recall and a local cross-encoder reranker (both **on by default** — together
 > +0.044 nDCG / +0.064 recall and half the trap-leak on the gold set), plus a labeled eval harness and an
 > opt-in toolbox (HyDE, hybrid BM25, topic expansion, MMR) documented in `.env.example`. See `PLAN.md`.
+>
+> v1.1.4 adds the query-understanding + diverse-sources layer: reference resolution for
+> "alternative to X" prompts, awesome-list mining, package-registry retrieval (all **on by default**,
+> quality-gated), and a fixed canonical-rescue budget. See `CHANGELOG.md` for measured results.
 
 ## What You Get On Screen
 
