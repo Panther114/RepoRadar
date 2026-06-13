@@ -2,6 +2,49 @@
 
 All notable changes to RepoRadar are recorded here.
 
+## v1.1.4
+
+Query-understanding + diverse-sources release. Adds the transition layer between a user's *wording* and
+search intent, plus two independent candidate sources beyond GitHub search. On the gold set, measured as a
+**frozen-pool A/B** (all features off vs on, same cache window, 2 repeats — the only attribution method that
+controls for GitHub pool variance + temp-0 LLM drift): **nDCG@10 0.643 → 0.686 (+0.044), MRR 0.844 → 0.938,
+AllRelevant 0.50 → 0.63, junk-rate 0.63 → 0.50 (lower is better), recall flat.** No prompt regressed; the
+biggest per-prompt gains were react-data-table (+0.15), self-hosted-analytics (+0.09) and the
+firebase-alternative archetype (+0.08). Cost: ≈ +8s p50 latency.
+
+- **On by default** (net win, gated for safety):
+  - `REF_RESOLVE` — **reference resolution.** Prompts that define the target by pointing at another project
+    ("open source alternative to firebase", "notion-like editor", "stripe clone") carry almost no domain
+    vocabulary in their literal words, so keyword/embedding search built from the prompt text systematically
+    underperforms. RepoRadar now detects the reference (regex + the LLM intent pass), derives dedicated
+    `<x> alternative` / `topic:<x>-alternative` queries that slot in at the top of the variant list, pulls
+    the referenced project's own description + topics in as **anchor text** for the intent embedding, and
+    **excludes the referenced project itself** from results. The firebase archetype reliably surfaces
+    supabase, pocketbase, nhost, trailbase and bknd.
+  - `AWESOME_LISTS` — mines the top `awesome-<topic>` lists for the query domain; the repos they link join
+    the candidate pool (curated membership is the strongest free relevance prior). Human curation earns a
+    repo its *pool slot*; relevance + authority still decide its rank.
+  - `REGISTRY_SOURCES` — npm and crates.io search as independent candidate sources (registry rank blends
+    popularity, maintenance and text relevance — surfacing repos GitHub's own "best match" buries). Fires
+    only for explicitly library-shaped queries.
+- **Injection gate (`sourceGate.ts`):** every out-of-band candidate (awesome / registry) must clear
+  topicality (≥2 distinct query tokens or a verbatim keyword phrase), traction (≥50★ unless the user asked
+  for small/underrated repos) and liveness (pushed within 2 years) before it can enter the pool, and
+  displacement of the organically-retrieved pool tail is capped at 10%. Without this the first cut drove the
+  junk-rate from 0.17 to 0.75; with it, junk *fell* below the baseline.
+- **Canonical-rescue fix in the funnel:** famous canonical hints (≥10k★) now bypass the similarity floor
+  (major projects often have marketing-speak descriptions that embed poorly — "Build like a team of
+  hundreds" for appwrite on a "firebase alternative" prompt), and the rescue budget counts *forced* rescues
+  only, so a query whose obvious answers already rank well still has budget for the one hint the embedding
+  missed. If a rescued repo is genuinely off-domain the listwise stage still demotes it. firebase prompt:
+  0.64 → 0.83 nDCG at its best.
+- **Findings / methodology:** the single most important lesson, reconfirmed: search A/B is dominated by
+  GitHub pool variance, so a candidate must be compared against a control run *in the same cache window* —
+  an earlier draft showed a phantom −0.40 on react-data-table purely because the control pool was 3 hours
+  stale. Awesome-list mining is sound for real single searches but gets rate-limited to zero during
+  back-to-back eval runs; registry search adds cross-framework noise on multi-framework domains that the
+  gate + cross-encoder absorb in aggregate. New unit tests cover the reference-detection layer (16 total).
+
 ## v1.1.3
 
 Search-quality release. Adds a rigorous evaluation harness, two relevance/recall features on by default,

@@ -7,6 +7,8 @@ import {
   stripUnsafeQualifiers,
 } from "../src/lib/search/queryPolicy";
 import { findGuidanceHints } from "../src/lib/search/guidance";
+import { detectReferences } from "../src/lib/search/referenceDetect";
+import { passesInjectionGate } from "../src/lib/search/sourceGate";
 import { fuseCandidateSources } from "../src/lib/search/candidateFusion";
 import { applyListwiseRanking } from "../src/lib/llm/listwise";
 import { BENCHMARK_PROMPTS, clampBenchmarkLimit } from "../scripts/search-benchmark.mjs";
@@ -208,5 +210,69 @@ describe("search quality policy", () => {
     assert(BENCHMARK_PROMPTS.every((p) => p.prompt.split(/\s+/).length <= 5));
     assert.equal(clampBenchmarkLimit(999), 10);
     assert.equal(clampBenchmarkLimit(undefined), 6);
+  });
+});
+
+describe("reference detection (v1.1.4)", () => {
+  it("detects 'alternative to X' references", () => {
+    assert.deepEqual(detectReferences("open source alternative to firebase"), ["firebase"]);
+    assert.deepEqual(detectReferences("alternatives to airtable"), ["airtable"]);
+  });
+
+  it("detects 'X alternative' and 'like X' phrasings", () => {
+    assert.deepEqual(detectReferences("self hosted notion alternative"), ["notion"]);
+    assert.deepEqual(detectReferences("something like supabase but lighter"), ["supabase"]);
+    assert.deepEqual(detectReferences("stripe clone"), ["stripe"]);
+    assert.deepEqual(detectReferences("a notion-like editor"), ["notion"]);
+  });
+
+  it("ignores generic words and non-reference prompts", () => {
+    assert.deepEqual(detectReferences("react data table with virtual scrolling"), []);
+    assert.deepEqual(detectReferences("rust web framework"), []);
+    assert.deepEqual(detectReferences("kubernetes monitoring dashboard"), []);
+    // "open source alternatives" with no named project must not capture "open".
+    assert.deepEqual(detectReferences("good open source alternatives"), []);
+  });
+
+  it("keeps dotted/hyphenated names intact", () => {
+    assert.deepEqual(detectReferences("alternative to next.js"), ["next.js"]);
+  });
+});
+
+describe("source injection gate (v1.1.4)", () => {
+  const recent = new Date(Date.now() - 30 * 86400_000).toISOString();
+  const stale = new Date(Date.now() - 3 * 365 * 86400_000).toISOString();
+  const base = (over: Partial<Candidate>): Candidate => ({
+    ...candidate(1, "acme/grid", 500),
+    description: "Headless data table library for React",
+    topics: ["react", "table", "datagrid"],
+    pushedAt: recent,
+    ...over,
+  });
+  const kws = ["react", "data table", "datagrid"];
+
+  it("admits topical, alive, credible repos", () => {
+    assert.equal(passesInjectionGate(base({}), kws, false), true);
+  });
+
+  it("rejects off-topic repos regardless of stars", () => {
+    const offTopic = base({ description: "Kubernetes operator for backups", topics: ["k8s"], fullName: "acme/op", name: "op" });
+    assert.equal(passesInjectionGate(offTopic, kws, false), false);
+  });
+
+  it("rejects low-star repos unless small projects were requested", () => {
+    const small = base({ stars: 10 });
+    assert.equal(passesInjectionGate(small, kws, false), false);
+    assert.equal(passesInjectionGate(small, kws, true), true);
+  });
+
+  it("rejects repos not pushed within two years", () => {
+    assert.equal(passesInjectionGate(base({ pushedAt: stale }), kws, false), false);
+    assert.equal(passesInjectionGate(base({ pushedAt: null }), kws, false), false);
+  });
+
+  it("admits on a verbatim multi-word keyword phrase", () => {
+    const phraseOnly = base({ fullName: "x/y", name: "y", description: "the fastest data table around", topics: [] });
+    assert.equal(passesInjectionGate(phraseOnly, kws, false), true);
   });
 });

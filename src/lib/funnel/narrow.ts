@@ -124,6 +124,7 @@ function intentText(intent: Intent): string {
     c.keywords.join(" "),
     c.requiredFeatures.join(" "),
     c.language ?? "",
+    intent.anchorText ?? "",
   ]
     .filter(Boolean)
     .join(". ");
@@ -142,8 +143,17 @@ export async function narrowCandidates(
   rescuedNames: string[] = [],
   debugContext?: { searchQueryId: string },
   hydeDoc?: string | null,
+  curatedNames?: Set<string>,
 ): Promise<FunnelResult> {
   const c = intent.constraints;
+  // Curated membership (v1.1.4) is recorded for debug traces only. An earlier
+  // cut added it as a flat +0.04 ranking boost; with cross-encoder scores
+  // clustered in a narrow band that was enough to leapfrog small curated-list
+  // repos over canonical projects that the mined list didn't happen to link
+  // (salvo/ohkami above actix/Rocket/warp). Curation earns a repo its POOL
+  // slot via injection — relevance and authority decide the rank.
+  const isCurated = (candidate: Candidate): boolean =>
+    curatedNames?.has(candidate.fullName.toLowerCase()) ?? false;
   const candTexts = candidates.map((candidate) => candidateText(candidate, lightEvidence?.get(candidate.githubId)));
 
   // Aspect-decomposed ranking: when the LLM produced ≥2 orthogonal aspects we
@@ -220,6 +230,7 @@ export async function narrowCandidates(
         worstAspect: sims[i].aspectSims.length ? Number(Math.min(...sims[i].aspectSims).toFixed(4)) : null,
         similarity: Number(similarity.toFixed(4)),
         relevance: Number(relevance[i].toFixed(4)),
+        curated: isCurated(candidate),
       });
     }
 
@@ -316,12 +327,24 @@ export async function narrowCandidates(
   const rescueFloor = minNaturalSim * 0.9;
 
   const maxRescues = Math.min(3, topN);
-  let rescueCount = selected.filter((entry) => rescued.has(entry.candidate.fullName.toLowerCase())).length;
+  // Budget counts FORCED rescues only. Counting naturally-selected canonical
+  // repos against it meant a query whose obvious answers already ranked well
+  // (supabase, pocketbase, nhost) had zero budget left for the one canonical
+  // hint the embedding missed (appwrite) — the exact case rescues exist for.
+  let rescueCount = 0;
   for (const entry of entries) {
     if (rescueCount >= maxRescues) break;
     const fullName = entry.candidate.fullName.toLowerCase();
     if (!rescued.has(fullName) || selectedNames.has(fullName)) continue;
-    if (entry.similarity < rescueFloor) continue; // off-domain canonical hint — skip
+    // Famous canonical hints (≥10k★) bypass the similarity floor. Major
+    // projects often have marketing-speak descriptions that embed poorly
+    // ("Build like a team of hundreds" for appwrite on an "alternative to
+    // firebase" prompt), so the floor rejected exactly the repos users most
+    // expect. If a famous hint IS off-domain, the listwise stage flags it
+    // relevant=false and demotes it below every genuine match — the rescue
+    // only buys it a seat at the table, not a rank.
+    const famous = entry.candidate.stars >= 10_000;
+    if (!famous && entry.similarity < rescueFloor) continue; // off-domain canonical hint — skip
     if (selected.length < topN) {
       selected.push(entry);
     } else {

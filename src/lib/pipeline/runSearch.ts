@@ -27,6 +27,11 @@ import { createLogger } from "@/lib/logger";
 import { findGuidanceHints } from "@/lib/search/guidance";
 import { generateHydeDoc } from "@/lib/search/hyde";
 import { expandByTopics } from "@/lib/search/graphExpand";
+import { buildReferenceContext } from "@/lib/search/referenceResolver";
+import { mineAwesomeLists } from "@/lib/search/awesome";
+import { searchRegistries } from "@/lib/search/registries";
+import { fetchCandidatesByName } from "@/lib/github/fetchRepos";
+import { passesInjectionGate } from "@/lib/search/sourceGate";
 import { writeSearchDiagnostics } from "@/lib/pipeline/diagnostics";
 import { debugTrace, searchDebugEnabled } from "@/lib/pipeline/debugTrace";
 import type { Analysis, Candidate, Intent, RepoEvidence, SearchDiagnostics, SearchFilters } from "@/lib/types";
@@ -182,7 +187,7 @@ export async function runSearch(
     // Fire LLM intent and heuristic-based search simultaneously.
     const searchTtlMs = (Number(process.env.SEARCH_CACHE_TTL_HOURS) || 2) * 3_600_000;
 
-    const [intentResult, heuristicCandidates] = await Promise.all([
+    const [intentResult, heuristicCandidates, refContextEarly] = await Promise.all([
       extractIntent(prompt, filters).catch((err) => {
         searchLog.warn("LLM intent failed, using heuristic", err);
         return heuristic;
@@ -203,10 +208,38 @@ export async function runSearch(
         saveCandidateCache(h, results.candidates).catch(() => {});
         return { candidates: results.candidates, fromCache: false };
       })(),
+      // Reference resolution (v1.1.4): regex-detected "alternative to X" /
+      // "like X" references resolve concurrently with intent extraction.
+      buildReferenceContext(prompt).catch((err) => {
+        searchLog.warn("Reference resolution failed (non-fatal)", err);
+        return null;
+      }),
     ]);
 
     const intent: Intent = intentResult;
     doneIntent();
+
+    // If the regexes found nothing but the LLM intent did flag a referenced
+    // project, resolve it now (rare; costs one extra GitHub call).
+    let refContext = refContextEarly;
+    if (!refContext && intent.referencedProjects?.length) {
+      refContext = await buildReferenceContext(prompt, intent.referencedProjects).catch(() => null);
+    }
+    if (refContext) {
+      // High-precision reference queries slot in at position 1 — early enough
+      // to survive the active-query cap, but leaving the LLM's strongest query
+      // at position 0 so sort-variant re-issues (which seed from the top 2)
+      // cover one LLM query AND one reference query instead of only references.
+      // Anchor text feeds the funnel's intent embedding.
+      intent.queries = Array.from(
+        new Set([...intent.queries.slice(0, 1), ...refContext.refQueries, ...intent.queries.slice(1)]),
+      );
+      intent.anchorText = refContext.anchorText;
+      searchLog.info("Reference resolved", {
+        referenced: refContext.referenced.map((r) => r.fullName),
+        refQueries: refContext.refQueries,
+      });
+    }
     searchLog.info("Intent extracted", {
       normalizedPrompt: intent.normalizedPrompt,
       queries: intent.queries,
@@ -326,11 +359,91 @@ export async function runSearch(
       searchLog.warn("Topic graph expansion failed (non-fatal)", err);
     }
 
+    // Diverse sources (v1.1.4): awesome-list mining + package registries feed
+    // two things — extra candidates the GitHub keyword search missed, and a
+    // curated-membership set the funnel uses as a quality boost. Registries
+    // only fire for explicitly library-shaped queries (npm hits for an infra
+    // query like "kubernetes monitoring" are wrappers, not answers). The fetch
+    // overlaps the GitHub-pool/graph work above and has a hard 10s budget — a
+    // slow registry can never stall the pipeline. Dedupe happens at merge.
+    const REGISTRY_TYPES = new Set(["library", "framework", "cli", "plugin", "extension", "template"]);
+    const curatedSet = new Set<string>();
+    const sourcesPromise = Promise.race([
+      Promise.all([
+        mineAwesomeLists(intent.constraints.keywords).catch(() => ({ curatedNames: [], lists: [] })),
+        REGISTRY_TYPES.has(intent.constraints.projectType)
+          ? searchRegistries(intent.constraints.keywords, intent.constraints.language).catch(() => [])
+          : Promise.resolve([]),
+      ]).then(async ([awesome, registryNames]) => {
+        const newNames = [...awesome.curatedNames.slice(0, 40), ...registryNames];
+        const fetched = newNames.length ? await fetchCandidatesByName(newNames.slice(0, 25)) : [];
+        return { awesome, registryNames, fetched };
+      }),
+      new Promise<null>((resolve) => setTimeout(() => resolve(null), 10_000)),
+    ]).catch(() => null);
+
+    // An "alternative to X" search must never return X itself.
+    if (refContext?.excludeFullNames.length) {
+      const excluded = new Set(refContext.excludeFullNames);
+      const before = candidates.length;
+      candidates = candidates.filter((cand) => !excluded.has(cand.fullName.toLowerCase()));
+      if (candidates.length < before) {
+        searchLog.info("Excluded referenced repo(s) from pool", {
+          excluded: refContext.excludeFullNames,
+        });
+      }
+    }
+
+    // Merge the gated source candidates BEFORE light enrichment so injected
+    // repos get README-head evidence too — without it their thin text loses
+    // the cross-encoder shortlist to keyword-stuffed organic candidates even
+    // when they are the better answer (react-data-table pool recall hit 1.00
+    // but nDCG fell in the first cut for exactly this reason). Every injected
+    // repo must pass the topicality/traction/liveness gate, and displacement
+    // of the organic pool tail is capped at 10% so out-of-band sources can
+    // never crowd out organically-retrieved candidates.
+    const lightEnrichTopN = Number(process.env.LIGHT_ENRICH_TOP_N) || 20;
+    let sourceAdded = 0;
+    const sources = await sourcesPromise;
+    if (sources) {
+      for (const name of sources.awesome.curatedNames) curatedSet.add(name.toLowerCase());
+      const inPool = new Set(candidates.map((cand) => cand.fullName.toLowerCase()));
+      const excluded = new Set(refContext?.excludeFullNames ?? []);
+      const gated = sources.fetched.filter(
+        (cand) =>
+          !inPool.has(cand.fullName.toLowerCase()) &&
+          !excluded.has(cand.fullName.toLowerCase()) &&
+          passesInjectionGate(cand, intent.constraints.keywords, intent.constraints.includeSmallProjects),
+      );
+      const maxNew = Math.min(gated.length, 12);
+      const maxEvict = Math.floor(env.MAX_CANDIDATES * 0.1);
+      const spare = Math.max(0, env.MAX_CANDIDATES - candidates.length);
+      const budget = Math.min(maxNew, spare + maxEvict);
+      const overflow = Math.max(0, candidates.length + budget - env.MAX_CANDIDATES);
+      if (overflow > 0) candidates.splice(candidates.length - overflow, overflow);
+      // Insert at the light-enrichment boundary: inside the enrichment window,
+      // without demoting the organic head out of it.
+      const insertAt = Math.min(lightEnrichTopN, candidates.length);
+      const toInsert = gated.slice(0, budget);
+      candidates.splice(insertAt, 0, ...toInsert);
+      sourceAdded = toInsert.length;
+      searchLog.info("Diverse sources merged", {
+        awesomeLists: sources.awesome.lists,
+        curatedTotal: sources.awesome.curatedNames.length,
+        registryHits: sources.registryNames.length,
+        fetched: sources.fetched.length,
+        passedGate: gated.length,
+        candidatesAdded: sourceAdded,
+      });
+    } else {
+      searchLog.warn("Diverse sources unavailable (timeout/failure) — continuing without them");
+    }
+
     // ── Stage 3: Funnel / narrowing ───────────────────────────────────────────
     await setJob(searchQueryId, { stage: "funnel", progress: 35 });
     const lightEvidence = await fetchLightRepoEvidenceBatch(
       candidates,
-      Number(process.env.LIGHT_ENRICH_TOP_N) || 20,
+      lightEnrichTopN + sourceAdded,
     ).catch((err) => {
       searchLog.warn("Light enrichment failed; funnel will use metadata only", err);
       return undefined;
@@ -351,6 +464,7 @@ export async function runSearch(
         intent.canonicalNames ?? [],
         { searchQueryId },
         hydeDoc,
+        curatedSet.size ? curatedSet : undefined,
       );
       doneFunnel();
       searchLog.info("Funnel complete", { survivors: funnelResult.entries.length });
