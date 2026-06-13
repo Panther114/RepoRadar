@@ -30,6 +30,7 @@ import { expandByTopics } from "@/lib/search/graphExpand";
 import { buildReferenceContext } from "@/lib/search/referenceResolver";
 import { mineAwesomeLists } from "@/lib/search/awesome";
 import { searchRegistries } from "@/lib/search/registries";
+import { normalizeCanonicalNames } from "@/lib/search/canonical";
 import { fetchCandidatesByName } from "@/lib/github/fetchRepos";
 import { passesInjectionGate } from "@/lib/search/sourceGate";
 import { writeSearchDiagnostics } from "@/lib/pipeline/diagnostics";
@@ -122,6 +123,7 @@ function makeDiagnostics(args: {
   searchQueryId: string;
   prompt: string;
   intent: Intent;
+  resolvedCanonicalNames: string[];
   heuristic: Intent;
   activeQueries: string[];
   perQueryResults: { query: string; total: number; repos: string[] }[];
@@ -129,7 +131,7 @@ function makeDiagnostics(args: {
   candidates: Candidate[];
   survivors?: string[];
 }): SearchDiagnostics {
-  const canonicalNames = args.intent.canonicalNames ?? [];
+  const canonicalNames = args.resolvedCanonicalNames;
   const candidateNames = new Set(args.candidates.map((c) => c.fullName.toLowerCase()));
   const survivorNames = new Set((args.survivors ?? []).map((name) => name.toLowerCase()));
   const droppedKnownCandidates = canonicalNames.filter((name) => {
@@ -144,6 +146,7 @@ function makeDiagnostics(args: {
     heuristicQueries: args.heuristic.queries,
     guidanceHints: findGuidanceHints(args.prompt),
     canonicalNames,
+    resolvedCanonicalNames: canonicalNames,
     activeQueries: args.activeQueries,
     perQueryResults: args.perQueryResults,
     dedupeCount: args.dedupeCount,
@@ -265,6 +268,7 @@ export async function runSearch(
     let activeQueries: string[] = [];
     let perQueryResults: { query: string; total: number; repos: string[] }[] = [];
     let dedupeCount = 0;
+    let resolvedCanonicalNames: string[] = [];
     const llmHash = hashJson({
       q: [...intent.queries].sort(),
       canonical: [...(intent.canonicalNames ?? [])].sort(),
@@ -294,6 +298,7 @@ export async function runSearch(
         activeQueries = details.activeQueries;
         perQueryResults = details.perQueryResults;
         dedupeCount = details.dedupeCount;
+        resolvedCanonicalNames = details.resolvedCanonicalNames;
         saveCandidateCache(llmHash, candidates).catch(() => {});
         searchLog.info("Candidates found (LLM fresh search)", { count: candidates.length });
 
@@ -315,12 +320,14 @@ export async function runSearch(
         fromCache: heuristicCandidates.fromCache,
       });
     }
+    intent.canonicalNames = normalizeCanonicalNames(intent.canonicalNames ?? [], candidates, resolvedCanonicalNames);
     doneSearch();
 
     writeSearchDiagnostics(makeDiagnostics({
       searchQueryId,
       prompt,
       intent,
+      resolvedCanonicalNames: intent.canonicalNames ?? [],
       heuristic,
       activeQueries,
       perQueryResults,
@@ -491,6 +498,7 @@ export async function runSearch(
       searchQueryId,
       prompt,
       intent,
+      resolvedCanonicalNames: intent.canonicalNames ?? [],
       heuristic,
       activeQueries,
       perQueryResults,

@@ -4,14 +4,16 @@ import path from "node:path";
 import { pathToFileURL } from "node:url";
 
 export const BENCHMARK_PROMPTS = [
-  { prompt: "good AI skills for codex", expected: ["codex", "claude", "skill", "agent"] },
-  { prompt: "notion editor", expected: ["tiptap", "lexical", "blocknote", "prosemirror", "slate"] },
-  { prompt: "simple react state", expected: ["zustand", "jotai", "redux", "valtio"] },
-  { prompt: "python api server", expected: ["fastapi", "flask", "django"] },
   { prompt: "browser testing", expected: ["playwright", "selenium", "puppeteer"] },
   { prompt: "local first sync", expected: ["yjs", "automerge", "loro", "rxdb"] },
   { prompt: "self hosted deploy", expected: ["coolify", "dokku", "caprover"] },
-  { prompt: "pdf rag", expected: ["langchain", "llama_index", "rag"] },
+  { prompt: "self hosted analytics", expected: ["plausible", "umami", "matomo"], forbidden: ["coolify", "dokku", "caprover"] },
+  { prompt: "python data validation", expected: ["pydantic", "jsonschema", "marshmallow"], forbidden: ["requests"] },
+  { prompt: "svelte data table", expected: ["table", "grid", "datatable"], forbidden: ["zustand", "redux", "jotai"] },
+  { prompt: "go web framework", expected: ["gin", "fiber", "echo"], forbidden: ["awesome", "comparison"] },
+  { prompt: "ruby data validation", expected: ["dry", "validation", "active_model"], forbidden: ["requests"] },
+  { prompt: "vector db embeddings", expected: ["qdrant", "weaviate", "milvus"] },
+  { prompt: "firebase alternative", expected: ["supabase", "appwrite", "pocketbase"] },
 ];
 
 const BASE = process.env.REPORADAR_URL ?? "http://localhost:2000";
@@ -72,6 +74,14 @@ function expectedPresence(results, expected) {
   }));
 }
 
+function forbiddenPresence(results, forbidden = []) {
+  const names = results.map((r) => String(r.repo?.fullName ?? "").toLowerCase());
+  return forbidden.map((term) => ({
+    term,
+    found: names.some((name) => name.includes(term.toLowerCase())),
+  }));
+}
+
 function diagnosticsFor(searchId) {
   if (!fs.existsSync(DIAGNOSTICS_FILE)) return null;
   const matches = fs
@@ -121,31 +131,42 @@ async function main() {
     const latencyMs = Date.now() - started;
     const topRepos = (result.results ?? []).slice(0, 10).map((r) => r.repo?.fullName ?? "unknown");
     const expected = expectedPresence(result.results ?? [], item.expected);
+    const forbidden = forbiddenPresence(result.results ?? [], item.forbidden);
     const diagnostics = diagnosticsFor(searchId);
+    const coverage = expected.filter((x) => x.found).length / Math.max(expected.length, 1);
+    const leakage = forbidden.filter((x) => x.found).length;
+    const score = Math.max(0, coverage - leakage * 0.25);
 
     const row = {
       prompt: item.prompt,
       searchId,
       status: result.status,
       latencyMs,
+      score,
       generatedQueries: diagnostics?.generatedQueries ?? [],
       activeQueryCount: diagnostics?.activeQueryCount ?? null,
       apiCallCounts: diagnostics?.apiCallCounts ?? null,
       topRepos,
       expected,
+      forbidden,
       candidatePoolCount: diagnostics?.candidatePoolCount ?? null,
       dedupeCount: diagnostics?.dedupeCount ?? null,
       funnelSurvivors: diagnostics?.funnelSurvivors ?? [],
       droppedKnownCandidates: diagnostics?.droppedKnownCandidates ?? [],
       diagnostics: "Raw candidate-pool details are also appended to logs/search-diagnostics.jsonl.",
-      reviewNote: "Manual diagnostic only; no benchmark score is computed.",
+      reviewNote: "Coverage score is a holdout smoke test only; inspect the top repos and diagnostics before trusting it.",
     };
     report.push(row);
     console.log(JSON.stringify(row, null, 2));
   }
 
+  const scores = report.map((row) => row.score);
   console.log("\nJSON summary:");
-  console.log(JSON.stringify({ generatedAt: new Date().toISOString(), report }, null, 2));
+  console.log(JSON.stringify({
+    generatedAt: new Date().toISOString(),
+    averageScore: scores.length ? scores.reduce((sum, score) => sum + score, 0) / scores.length : null,
+    report,
+  }, null, 2));
 }
 
 if (import.meta.url === pathToFileURL(process.argv[1]).href) {

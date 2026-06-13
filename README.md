@@ -85,9 +85,10 @@ rather than popularity alone.
 > "alternative to X" prompts, awesome-list mining, package-registry retrieval (all **on by default**,
 > quality-gated), and a fixed canonical-rescue budget. See `CHANGELOG.md` for measured results.
 >
-> v1.1.5 adds relevance-floor truncation and canonical-rescue hardening without eval-targeted guidance.
-> On the gold set, junk-rate reached 0.00 and AllRelevant reached 1.00 while nDCG@10 improved
-> 0.687 -> 0.721 overall; on unguided prompts, nDCG@10 improved 0.748 -> 0.835.
+> v1.1.5 adds relevance-floor truncation, canonical-rescue hardening, guidance gating, and canonical-name
+> normalization — all without eval-targeted guidance. On a fresh gold-set A/B vs v1.1.4, junk-rate reached
+> 0.00 and AllRelevant reached 1.00 while nDCG@10 improved 0.644 -> 0.752 overall (seven of eight prompts up,
+> none down); on unguided prompts nDCG@10 improved 0.712 -> 0.849.
 
 ## What You Get On Screen
 
@@ -181,9 +182,12 @@ node scripts/eval/report.mjs baseline candidate
 ```
 
 It reports nDCG@10, Recall@15, pool recall, MRR, trap-leak, junk rate, and latency over a field-diverse
-prompt set (`scripts/eval/gold.json`). Use it to A/B any ranking change. Note: GitHub returns different
-pools across calls and temperature-0 intent still varies via provider routing, so trust the **median of
-≥3 repeats** and treat sub-0.03 nDCG deltas as noise.
+prompt set (`scripts/eval/gold.json`). The saved JSON now includes per-repeat search IDs, top results,
+pool-missing gold repos, and any guidance hints that fired; `report.mjs` also breaks results out as
+guided vs unguided so recall wins from general ecosystem knowledge are visible separately from the
+baseline algorithm. Use it to A/B any ranking change. Note: GitHub returns different pools across calls
+and temperature-0 intent still varies via provider routing, so trust the **median of ≥3 repeats** and
+treat sub-0.03 nDCG deltas as noise.
 
 There is also a shorter manual benchmark:
 
@@ -191,9 +195,10 @@ There is also a shorter manual benchmark:
 node scripts/search-benchmark.mjs --limit 6
 ```
 
-It uses general-user prompts such as `browser testing`, `notion editor`, and `simple react state`.
-It reports top repositories, expected-known repo presence, latency, and diagnostic evidence in
-`logs/search-diagnostics.jsonl`.
+It uses short holdout prompts across adjacent ecosystems such as `self hosted analytics`, `python data validation`,
+`go web framework`, and `firebase alternative`. Alongside expected-known repo presence, it also checks
+for obvious negative leaks (for example deploy tools leaking into analytics) and emits a lightweight
+coverage score plus diagnostic evidence in `logs/search-diagnostics.jsonl`.
 
 For a single ad-hoc query you can run the local runner and print the ranked shortlist with
 per-repo fit/future/similarity/source:

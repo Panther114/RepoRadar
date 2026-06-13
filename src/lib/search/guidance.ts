@@ -1,6 +1,10 @@
 import type { GuidanceHint } from "@/lib/types";
 
-const GUIDANCE: GuidanceHint[] = [
+type GuidanceRule = GuidanceHint & {
+  requiredTokenGroups?: string[][];
+};
+
+const GUIDANCE: GuidanceRule[] = [
   {
     id: "browser-testing",
     match: "browser testing automation playwright selenium puppeteer ui test",
@@ -28,6 +32,7 @@ const GUIDANCE: GuidanceHint[] = [
     terms: ["React state management", "global store", "Zustand", "Jotai", "Redux", "Valtio"],
     repoNames: ["pmndrs/zustand", "pmndrs/jotai", "reduxjs/redux", "pmndrs/valtio"],
     queries: ["zustand OR jotai OR redux OR valtio", "react state management sort:stars"],
+    requiredTokenGroups: [["state", "store", "redux", "zustand", "jotai", "valtio"]],
   },
   {
     id: "python-api",
@@ -35,6 +40,7 @@ const GUIDANCE: GuidanceHint[] = [
     terms: ["Python API framework", "FastAPI", "Django REST", "Flask", "OpenAPI"],
     repoNames: ["fastapi/fastapi", "encode/django-rest-framework", "pallets/flask"],
     queries: ["fastapi OR flask OR django-rest-framework", "python api framework sort:stars"],
+    requiredTokenGroups: [["api", "server", "backend", "openapi", "fastapi", "flask", "django"]],
   },
   {
     id: "self-hosted-deploy",
@@ -42,6 +48,7 @@ const GUIDANCE: GuidanceHint[] = [
     terms: ["self-hosted PaaS", "Heroku alternative", "Coolify", "Dokku", "CapRover"],
     repoNames: ["coollabsio/coolify", "dokku/dokku", "caprover/caprover"],
     queries: ["coolify OR dokku OR caprover", "self-hosted PaaS Heroku sort:stars"],
+    requiredTokenGroups: [["deploy", "heroku", "paas", "coolify", "dokku", "caprover"]],
   },
   {
     id: "pdf-rag",
@@ -65,20 +72,30 @@ const GUIDANCE: GuidanceHint[] = [
 // inject zustand/jotai/redux as canonical rescues, polluting the shortlist.
 const MIN_HINT_SCORE = 2;
 
-function scoreHint(text: string, hint: GuidanceHint): number {
+function tokenize(text: string): string[] {
+  return text.toLowerCase().split(/[^a-z0-9+#]+/).filter((tok) => tok.length > 2);
+}
+
+function satisfiesRequiredGroups(tokens: Set<string>, hint: GuidanceRule): boolean {
+  if (!hint.requiredTokenGroups?.length) return true;
+  return hint.requiredTokenGroups.every((group) => group.some((token) => tokens.has(token)));
+}
+
+function scoreHint(text: string, hint: GuidanceRule): number {
   const haystack = `${hint.match} ${hint.terms.join(" ")} ${hint.repoNames.join(" ")}`.toLowerCase();
   // Count DISTINCT matching tokens (a repeated word shouldn't inflate the score).
   const matched = new Set<string>();
-  for (const tok of text.toLowerCase().split(/[^a-z0-9+#]+/)) {
+  for (const tok of tokenize(text)) {
     if (tok.length > 2 && haystack.includes(tok)) matched.add(tok);
   }
   return matched.size;
 }
 
 export function findGuidanceHints(prompt: string, limit = 3): GuidanceHint[] {
+  const promptTokens = new Set(tokenize(prompt));
   return GUIDANCE
     .map((hint) => ({ hint, score: scoreHint(prompt, hint) }))
-    .filter((x) => x.score >= MIN_HINT_SCORE)
+    .filter((x) => x.score >= MIN_HINT_SCORE && satisfiesRequiredGroups(promptTokens, x.hint))
     .sort((a, b) => b.score - a.score)
     .slice(0, limit)
     .map((x) => x.hint);

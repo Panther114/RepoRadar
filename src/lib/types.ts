@@ -180,6 +180,7 @@ export interface SearchDiagnostics {
   heuristicQueries: string[];
   guidanceHints: GuidanceHint[];
   canonicalNames: string[];
+  resolvedCanonicalNames?: string[];
   activeQueries: string[];
   perQueryResults: { query: string; total: number; repos: string[] }[];
   dedupeCount: number;
