@@ -112,7 +112,7 @@ async function main() {
 }
 
 function capturedFlags() {
-  const keys = ["MAX_CANDIDATES", "FUNNEL_TOP_N", "SEARCH_SORT_VARIANTS", "HYBRID_FUNNEL", "HYDE", "GRAPH_TOPICS", "MMR_DIVERSIFY", "CROSS_ENCODER_RERANK", "GITHUB_PER_PAGE"];
+  const keys = ["MAX_CANDIDATES", "FUNNEL_TOP_N", "RESULT_RELEVANCE_FLOOR", "SEARCH_SORT_VARIANTS", "HYBRID_FUNNEL", "HYDE", "GRAPH_TOPICS", "MMR_DIVERSIFY", "CROSS_ENCODER_RERANK", "GITHUB_PER_PAGE"];
   const o = {};
   for (const k of keys) if (process.env[k] != null) o[k] = process.env[k];
   return o;

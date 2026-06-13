@@ -6,7 +6,7 @@ import {
   expandQuerySet,
   stripUnsafeQualifiers,
 } from "../src/lib/search/queryPolicy";
-import { findGuidanceHints } from "../src/lib/search/guidance";
+import { findGuidanceHints, guidanceCanonicalNames } from "../src/lib/search/guidance";
 import { detectReferences } from "../src/lib/search/referenceDetect";
 import { passesInjectionGate } from "../src/lib/search/sourceGate";
 import { fuseCandidateSources } from "../src/lib/search/candidateFusion";
@@ -119,6 +119,19 @@ describe("search quality policy", () => {
     assert(queries.length <= 10);
   });
 
+  it("does not encode gold-set domains as canonical guidance", () => {
+    assert.deepEqual(guidanceCanonicalNames("react data table"), []);
+    assert.deepEqual(guidanceCanonicalNames("kubernetes monitoring and observability"), []);
+    const rustNames = guidanceCanonicalNames("rust web framework");
+    assert(!rustNames.includes("tokio-rs/axum"));
+    assert(!rustNames.includes("actix/actix-web"));
+    assert(!rustNames.includes("rwf2/Rocket"));
+    const pythonNames = guidanceCanonicalNames("python data validation library");
+    assert(!pythonNames.includes("pydantic/pydantic"));
+    assert(!pythonNames.includes("python-jsonschema/jsonschema"));
+    assert(!pythonNames.includes("marshmallow-code/marshmallow"));
+  });
+
   it("uses retrieval fusion to keep candidates from later query sources in the pool", () => {
     const fused = fuseCandidateSources([
       { query: "browser testing", candidates: [candidate(1, "SeleniumHQ/selenium"), candidate(2, "puppeteer/puppeteer")] },
@@ -202,6 +215,8 @@ describe("search quality policy", () => {
     // Despite a lower rank number, the relevant repo must come first.
     assert.equal(ranked[0].evidence.candidate.fullName, "microsoft/playwright");
     assert.equal(ranked[1].evidence.candidate.fullName, "pmndrs/zustand");
+    assert.equal(ranked[0].analysis.relevant, true);
+    assert.equal(ranked[1].analysis.relevant, false);
     assert(ranked[1].analysis.fit <= 0.4);
   });
 

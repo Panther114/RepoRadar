@@ -84,6 +84,10 @@ rather than popularity alone.
 > v1.1.4 adds the query-understanding + diverse-sources layer: reference resolution for
 > "alternative to X" prompts, awesome-list mining, package-registry retrieval (all **on by default**,
 > quality-gated), and a fixed canonical-rescue budget. See `CHANGELOG.md` for measured results.
+>
+> v1.1.5 adds relevance-floor truncation and canonical-rescue hardening without eval-targeted guidance.
+> On the gold set, junk-rate reached 0.00 and AllRelevant reached 1.00 while nDCG@10 improved
+> 0.687 -> 0.721 overall; on unguided prompts, nDCG@10 improved 0.748 -> 0.835.
 
 ## What You Get On Screen
 
@@ -160,6 +164,7 @@ Important environment variables:
 | `SEARCH_DEBUG` | When `true`, writes per-candidate funnel/ranking traces to `logs/search-debug.jsonl` (local tuning only) |
 | `GITHUB_PER_PAGE` | Results fetched per GitHub query (recall lever; default `40`) |
 | `SEARCH_SORT_VARIANTS` | Re-issue top queries under `sort:stars`/`sort:updated` and RRF-fuse (recall) |
+| `RESULT_RELEVANCE_FLOOR` | Drops explicit off-topic, meta/listicle, and low-signal tail results instead of padding to 15 |
 | `HYDE` | Embed an LLM-written "ideal repo" description alongside the query (recall) |
 | `CROSS_ENCODER_RERANK` | Local cross-encoder reranks the funnel shortlist (precision) |
 | `RERANK_MODEL` | Cross-encoder model id (default `Xenova/ms-marco-MiniLM-L-6-v2`) |

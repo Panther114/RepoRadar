@@ -326,7 +326,7 @@ export async function narrowCandidates(
   const minNaturalSim = naturalSims.length ? Math.min(...naturalSims) : 0;
   const rescueFloor = minNaturalSim * 0.9;
 
-  const maxRescues = Math.min(3, topN);
+  const maxRescues = Math.min(5, topN);
   // Budget counts FORCED rescues only. Counting naturally-selected canonical
   // repos against it meant a query whose obvious answers already ranked well
   // (supabase, pocketbase, nhost) had zero budget left for the one canonical

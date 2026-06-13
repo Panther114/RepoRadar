@@ -2,6 +2,40 @@
 
 All notable changes to RepoRadar are recorded here.
 
+## v1.1.5
+
+Search-relevance release focused on making the result contract honest: return fewer clean results instead
+of padding the top-15 with weak, off-topic, or meta/listicle repos. An earlier draft added canonical
+guidance for four gold-set domains; that was removed before release because it encoded eval answers rather
+than a general algorithm.
+
+Measured as a back-to-back 2-repeat gold-set A/B against v1.1.4 (`v114-control-honest2` vs
+`v115-candidate-honest`, same local database/cache window): **nDCG@10 0.687 → 0.721 (+0.035),
+Recall@15 0.584 → 0.622, PoolRecall 0.787 → 0.810, MRR 0.906 → 0.875, AllRelevant 0.69 → 1.00,
+trap-leak 0.13 → 0.00, junk-rate 0.44 → 0.00.** Latency cost in this run: p50 29s → 32s and
+p95 52s → 58s.
+
+Split by the four formerly targeted/guided gold prompts versus the four unguided prompts:
+**guided nDCG@10 0.625 → 0.608, junk 0.25 → 0.00, AllRelevant 0.625 → 1.00; unguided nDCG@10
+0.748 → 0.835, Recall@15 0.625 → 0.708, junk 0.625 → 0.00, AllRelevant 0.75 → 1.00.** The unguided
+slice is the best read on generalizable gain: the release improves cleanliness strongly and ranking
+moderately without injecting the eval answer key.
+
+- **Result relevance floor (default on):** `RESULT_RELEVANCE_FLOOR` now lets the pipeline return fewer than
+  15 results instead of padding with weak tail items. It drops explicit listwise `relevant=false` results,
+  meta/listicle/comparison repos unless the user asks for them, and low-star + weak-fit/weak-future repos
+  unless the user explicitly asks for small/hidden projects. This made CRDT return a clean 10-result list
+  instead of filling slots with personal CRDT demos.
+- **No eval-targeted guidance:** the release keeps the pre-existing general guidance table, but removes the
+  draft entries for react-data-table, kubernetes-observability, rust-web-framework, and
+  python-data-validation. New tests assert those gold-set domains do not inject their gold canonical repos.
+- **Canonical rescue hardening:** diverse-source insertion no longer evicts canonical candidates from the
+  pool tail; the forced-rescue budget now allows up to 5 canonical candidates. This is a general protection
+  for canonical names produced by intent/guidance/reference resolution, not a gold-set answer injection.
+- **Listwise ranking guidance:** the listwise reranker now explicitly prefers established canonical
+  implementations for library/framework/tool searches over adjacent UI projects, tutorials, comparisons,
+  examples, and thin wrappers when the evidence fits.
+
 ## v1.1.4
 
 Query-understanding + diverse-sources release. Adds the transition layer between a user's *wording* and

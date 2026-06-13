@@ -212,6 +212,8 @@ export type ComponentScores = Record<string, number>;
 /** The scored + explained result. Scores are AI-produced (or deterministic fallback). */
 export interface Analysis {
   repoType: string;
+  /** Explicit relevance verdict from listwise ranking. Absent for deterministic/pointwise fallback. */
+  relevant?: boolean;
   fit: number;
   future: number;
   underrated: number;
