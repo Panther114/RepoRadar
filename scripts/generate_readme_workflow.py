@@ -11,7 +11,6 @@ from PIL import Image, ImageDraw, ImageFilter, ImageFont
 ROOT = Path(__file__).resolve().parents[1]
 PUBLIC = ROOT / "public"
 OUT = PUBLIC / "readme-workflow.png"
-MASCOT_OUT = PUBLIC / "reporadar-mascot.png"
 
 W, H = 1800, 1360
 
@@ -202,9 +201,7 @@ def make_mascot() -> Image.Image:
 
     alpha = src.split()[-1].filter(ImageFilter.GaussianBlur(0.35))
     src.putalpha(alpha)
-    crop = src.crop((52, 58, 600, 640))
-    crop.save(MASCOT_OUT)
-    return crop
+    return src.crop((52, 58, 600, 640))
 
 
 def paper_background() -> Image.Image:
@@ -377,7 +374,6 @@ def main() -> None:
     audit.assert_no_same_band_overlaps()
     img.save(OUT, quality=96)
     print(f"wrote {OUT}")
-    print(f"wrote {MASCOT_OUT}")
     print(f"layout boxes: {len(audit.boxes)}")
     print(f"text boxes checked: {len(audit.text_boxes)}")
 

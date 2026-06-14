@@ -3,7 +3,7 @@ import { env } from "@/lib/env";
 
 // A single authenticated Octokit instance. Without GITHUB_TOKEN the GitHub
 // Search API is heavily rate-limited (~10 req/min), so a token is strongly
-// recommended (see setup.txt).
+// recommended (see README.md / .env.example).
 const globalForOctokit = globalThis as unknown as {
   octokit: Octokit | undefined;
 };

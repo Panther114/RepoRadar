@@ -214,7 +214,6 @@ is gitignored.
 
 ## Local Docs
 
-- [Setup guide](./setup.txt)
 - [Architecture and product spec](./REPORADAR.md)
 - [Changelog](./CHANGELOG.md)
 

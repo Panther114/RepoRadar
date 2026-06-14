@@ -36,8 +36,8 @@ yarn-error.log*
 
 # local dev artifacts
 devlog.txt
-dev-*.txt
-prod-*.txt
+*-stdout.txt
+*-stderr.txt
 /logs/
 __pycache__/
 /*.mp4
@@ -50,6 +50,7 @@ __pycache__/
 
 # local agent/editor state
 /.claude/
+/.codex/
 AGENTS.md
 agents.md
 
